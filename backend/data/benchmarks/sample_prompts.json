@@ -1,0 +1,10 @@
+[
+  {"id": "q1", "prompt": "What is the capital of France?", "category": "general_qa"},
+  {"id": "q2", "prompt": "Summarize the benefits of regular exercise in three bullet points.", "category": "summarization"},
+  {"id": "q3", "prompt": "Write a Python function to check if a string is a palindrome.", "category": "coding"},
+  {"id": "q4", "prompt": "Debug this code and explain the issue:\n```python\ndef factorial(n):\n    return n * factorial(n-1)\n```", "category": "debugging"},
+  {"id": "q5", "prompt": "Explain why the sky appears blue using physics concepts.", "category": "reasoning"},
+  {"id": "q6", "prompt": "Translate 'Good morning, how are you?' into Spanish.", "category": "translation"},
+  {"id": "q7", "prompt": "Extract the names and dates from: 'Alice joined on 2021-05-01 and Bob joined on 2022-11-14.'", "category": "extraction"},
+  {"id": "q8", "prompt": "Create a 7-day study plan for learning SQL basics.", "category": "planning"}
+]
