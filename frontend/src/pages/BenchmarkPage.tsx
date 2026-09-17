@@ -1,79 +1,138 @@
-import { useEffect, useState } from 'react';
-import { Loader2, Play } from 'lucide-react';
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Legend,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
-import { ChartCard } from '../components/ChartCard';
+import { useEffect, useMemo, useState } from 'react';
+import { FlaskConical, History, Play } from 'lucide-react';
+import { Badge } from '../components/Badge';
+import { Button } from '../components/Button';
+import { Card } from '../components/Card';
+import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { Input } from '../components/Input';
 import { JobProgressBar } from '../components/JobProgressBar';
 import { PageHeader } from '../components/PageHeader';
-import { StatCard } from '../components/StatCard';
+import { Table, TableContainer, TBody, Td, Th, THead, Tr } from '../components/Table';
 import {
   fetchBenchmarkReport,
   fetchBenchmarkStatus,
   fetchBenchmarks,
   startBenchmark,
 } from '../services/api';
-import type { BenchmarkReport, BenchmarkStrategy } from '../types';
+import type { BenchmarkJobStatus, BenchmarkReport, BenchmarkStrategy } from '../types';
+import { ComparisonCharts } from './benchmark/ComparisonCharts';
+import { ComparisonTable, SampleTable } from './benchmark/ComparisonTable';
+import { Interpretation } from './benchmark/Interpretation';
+import { StrategyGuide } from './benchmark/StrategyGuide';
+import {
+  STRATEGY_ORDER,
+  formatCost,
+  formatMs,
+  formatPercent,
+  formatTimestamp,
+  strategyBadge,
+  strategyLabel,
+  toChartRows,
+} from './benchmark/format';
 
-const strategyLabels: Record<string, string> = {
-  always_strong: 'Always Strong',
-  always_cheap: 'Always Cheap',
-  adaptive_router: 'Adaptive Router',
-};
+const ALL_STRATEGIES: BenchmarkStrategy[] = [...STRATEGY_ORDER];
 
-const allStrategies: BenchmarkStrategy[] = ['always_strong', 'always_cheap', 'adaptive_router'];
+function statusLabel(status: BenchmarkJobStatus['status'] | 'starting'): string {
+  switch (status) {
+    case 'starting':
+      return 'Starting evaluation…';
+    case 'queued':
+      return 'Queued';
+    case 'running':
+      return 'Evaluating strategies…';
+    case 'completed':
+      return 'Completed';
+    case 'failed':
+      return 'Failed';
+    default:
+      return 'Running';
+  }
+}
 
 export function BenchmarkPage() {
   const [datasetPath, setDatasetPath] = useState('data/benchmarks/sample_prompts.json');
   const [qualityFloor, setQualityFloor] = useState(0.9);
   const [maxPrompts, setMaxPrompts] = useState(8);
-  const [strategies, setStrategies] = useState<BenchmarkStrategy[]>(allStrategies);
+  const [strategies, setStrategies] = useState<BenchmarkStrategy[]>(ALL_STRATEGIES);
+
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobProgress, setJobProgress] = useState(0);
-  const [loading, setLoading] = useState(false);
+  const [jobStatus, setJobStatus] = useState<BenchmarkJobStatus['status'] | 'starting' | null>(null);
+  const [running, setRunning] = useState(false);
+
   const [error, setError] = useState<string | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [report, setReport] = useState<BenchmarkReport | null>(null);
   const [history, setHistory] = useState<BenchmarkReport[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
 
   useEffect(() => {
-    fetchBenchmarks().then(setHistory).catch(() => undefined);
+    let cancelled = false;
+    setHistoryLoading(true);
+    fetchBenchmarks()
+      .then((items) => {
+        if (!cancelled) {
+          setHistory(items);
+          setHistoryError(null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setHistoryError('Could not load recent benchmarks.');
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [report]);
 
   useEffect(() => {
     if (!jobId) return;
-    const interval = setInterval(async () => {
+    let cancelled = false;
+
+    const poll = async () => {
       try {
         const status = await fetchBenchmarkStatus(jobId);
+        if (cancelled) return;
         setJobProgress(status.progress);
+        setJobStatus(status.status);
         if (status.status === 'completed' && status.report) {
           setReport(status.report);
-          setLoading(false);
+          setRunning(false);
           setJobId(null);
+          setJobStatus(null);
         } else if (status.status === 'failed') {
           setError(status.error ?? 'Benchmark failed');
-          setLoading(false);
+          setRunning(false);
           setJobId(null);
+          setJobStatus(null);
         }
       } catch {
+        if (cancelled) return;
         setError('Failed to poll benchmark status');
-        setLoading(false);
+        setRunning(false);
         setJobId(null);
+        setJobStatus(null);
       }
+    };
+
+    void poll();
+    const interval = setInterval(() => {
+      void poll();
     }, 1500);
-    return () => clearInterval(interval);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [jobId]);
 
   const toggleStrategy = (strategy: BenchmarkStrategy) => {
+    if (running) return;
     setStrategies((prev) =>
-      prev.includes(strategy) ? prev.filter((s) => s !== strategy) : [...prev, strategy],
+      prev.includes(strategy) ? prev.filter((item) => item !== strategy) : [...prev, strategy],
     );
   };
 
@@ -82,10 +141,11 @@ export function BenchmarkPage() {
       setError('Select at least one strategy.');
       return;
     }
-    setLoading(true);
+    setRunning(true);
     setError(null);
     setReport(null);
     setJobProgress(0);
+    setJobStatus('starting');
     try {
       const job = await startBenchmark({
         dataset_path: datasetPath,
@@ -94,147 +154,226 @@ export function BenchmarkPage() {
         strategies,
       });
       setJobId(job.job_id);
+      setJobProgress(job.progress);
+      setJobStatus(job.status);
     } catch {
-      setError('Failed to start benchmark. Ensure backend is running.');
-      setLoading(false);
+      setError('Failed to start benchmark. Ensure the backend is running and strong/small models are enabled.');
+      setRunning(false);
+      setJobStatus(null);
     }
   };
 
   const loadReport = async (reportId: string) => {
+    if (running) return;
     try {
+      setError(null);
       setReport(await fetchBenchmarkReport(reportId));
     } catch {
       setError('Failed to load benchmark report.');
     }
   };
 
-  const chartData =
-    report?.strategies.map((item) => ({
-      name: strategyLabels[item.strategy] ?? item.strategy,
-      quality: Number((item.metrics.average_quality * 100).toFixed(1)),
-      costReduction: Number((item.metrics.cost_reduction * 100).toFixed(1)),
-      qualityRetention: Number((item.metrics.quality_retention * 100).toFixed(1)),
-      routingAccuracy: Number((item.metrics.routing_accuracy * 100).toFixed(1)),
-    })) ?? [];
+  const chartRows = useMemo(() => (report ? toChartRows(report) : []), [report]);
 
   return (
     <div>
       <PageHeader
-        title="Benchmark"
-        description="Compare Always Strong, Always Cheap, and Adaptive Router using controlled experiments."
+        title="Model Routing Evaluation"
+        description="How does Adaptive Routing compare with fixed Always Strong and Always Cheap strategies on the same prompt set?"
       />
 
-      <div className="mb-6 space-y-4 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-          <label className="text-sm text-slate-400 md:col-span-2">
-            Dataset Path
-            <input
+      <Card className="mb-6">
+        <h3 className="mb-1 text-sm font-medium text-ink-primary">Benchmark controls</h3>
+        <p className="mb-4 text-xs text-ink-muted">
+          All selected strategies run against the same dataset, quality floor, and prompt limit.
+        </p>
+        <div className="mb-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+          <label className="text-xs text-ink-muted md:col-span-2">
+            Dataset path
+            <Input
               value={datasetPath}
-              onChange={(e) => setDatasetPath(e.target.value)}
-              className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
+              disabled={running}
+              onChange={(event) => setDatasetPath(event.target.value)}
+              className="mt-1.5"
             />
           </label>
-          <label className="text-sm text-slate-400">
-            Quality Floor
-            <input
+          <label className="text-xs text-ink-muted">
+            Quality floor
+            <Input
               type="number"
-              min={0.5}
+              min={0}
               max={1}
               step={0.05}
               value={qualityFloor}
-              onChange={(e) => setQualityFloor(Number(e.target.value))}
-              className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
+              disabled={running}
+              onChange={(event) => setQualityFloor(Number(event.target.value))}
+              className="mt-1.5"
             />
+            <span className="mt-1 block text-[11px] text-ink-disabled">
+              {formatPercent(qualityFloor, 0)} minimum quality target for the router
+            </span>
           </label>
-          <label className="text-sm text-slate-400">
-            Max Prompts
-            <input
+          <label className="text-xs text-ink-muted">
+            Max prompts
+            <Input
               type="number"
               min={1}
-              max={20}
+              max={200}
               value={maxPrompts}
-              onChange={(e) => setMaxPrompts(Number(e.target.value))}
-              className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
+              disabled={running}
+              onChange={(event) => setMaxPrompts(Number(event.target.value))}
+              className="mt-1.5"
             />
           </label>
         </div>
-        <div>
-          <p className="mb-2 text-sm text-slate-400">Strategies</p>
-          <div className="flex flex-wrap gap-3">
-            {allStrategies.map((strategy) => (
-              <label key={strategy} className="flex items-center gap-2 text-sm text-slate-300">
-                <input
-                  type="checkbox"
-                  checked={strategies.includes(strategy)}
-                  onChange={() => toggleStrategy(strategy)}
-                  className="rounded border-slate-600"
-                />
-                {strategyLabels[strategy]}
-              </label>
-            ))}
-          </div>
-        </div>
-        <button
-          onClick={handleRun}
-          disabled={loading}
-          className="flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
-        >
-          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-          Run Benchmark
-        </button>
-      </div>
 
-      {loading && jobId && <JobProgressBar progress={jobProgress} label="Running benchmark..." />}
+        <p className="mb-2 text-xs text-ink-muted">Strategies</p>
+        <StrategyGuide selected={strategies} disabled={running} onToggle={toggleStrategy} />
+
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <Button onClick={() => void handleRun()} loading={running} disabled={running || strategies.length === 0}>
+            {!running && <Play className="h-4 w-4" />}
+            {running ? 'Running…' : 'Run benchmark'}
+          </Button>
+          {running && <Badge variant="info">{jobId ? `Job ${jobId.slice(0, 8)}` : 'Starting'}</Badge>}
+        </div>
+      </Card>
+
+      {running && <JobProgressBar progress={jobProgress} label={statusLabel(jobStatus ?? 'running')} />}
       {error && <ErrorBanner message={error} />}
 
-      {report && (
-        <>
-          <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
-            {report.strategies.map((item) => (
-              <StatCard
-                key={item.strategy}
-                label={strategyLabels[item.strategy] ?? item.strategy}
-                value={`${(item.metrics.average_quality * 100).toFixed(1)}% quality`}
-                subtext={`Cost $${item.metrics.total_cost.toFixed(6)} · P95 ${item.metrics.p95_latency_ms.toFixed(0)} ms · Strong ${(item.metrics.strong_model_usage * 100).toFixed(0)}%`}
-              />
-            ))}
-          </div>
-
-          <ChartCard title="Strategy Comparison">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 12 }} />
-                <YAxis tick={{ fill: '#94a3b8', fontSize: 12 }} />
-                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155' }} />
-                <Legend />
-                <Bar dataKey="qualityRetention" name="Quality Retention %" fill="#22c55e" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="costReduction" name="Cost Reduction %" fill="#6366f1" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="routingAccuracy" name="Routing Accuracy %" fill="#f59e0b" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </ChartCard>
-        </>
-      )}
-
-      {history.length > 0 && (
-        <div className="mt-8 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
-          <h3 className="text-sm font-medium text-white">Recent Benchmarks</h3>
-          <ul className="mt-3 space-y-2 text-sm">
-            {history.slice(0, 8).map((item) => (
-              <li key={item.id}>
-                <button
-                  onClick={() => loadReport(item.id)}
-                  className="text-left text-slate-400 hover:text-brand-200"
-                >
-                  {new Date(item.created_at).toLocaleString()} · floor {(item.quality_floor * 100).toFixed(0)}% ·{' '}
-                  {item.strategies.length} strategies
-                </button>
-              </li>
-            ))}
-          </ul>
+      {!report && !running && (
+        <div className="mb-8">
+          <EmptyState
+            icon={FlaskConical}
+            title="No evaluation results yet"
+            description="Choose strategies, then run a benchmark to compare Adaptive Routing with fixed model baselines."
+          />
         </div>
       )}
+
+      {report && (
+        <div className="mb-8 space-y-8">
+          <section>
+            <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+              <h3 className="text-sm font-medium text-ink-primary">Results</h3>
+              <p className="text-xs text-ink-muted">
+                {formatTimestamp(report.created_at)} · {report.dataset_path} · floor {formatPercent(report.quality_floor, 0)}
+              </p>
+            </div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              {report.strategies.map((item) => (
+                <Card key={item.strategy}>
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <Badge variant={strategyBadge(item.strategy)}>{strategyLabel(item.strategy)}</Badge>
+                    <span className="text-xs text-ink-muted">{item.metrics.total_requests} requests</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <StatMini label="Avg. quality" value={formatPercent(item.metrics.average_quality)} />
+                    <StatMini label="Avg. cost" value={formatCost(item.metrics.average_cost)} />
+                    <StatMini label="Avg. latency" value={formatMs(item.metrics.average_latency_ms)} />
+                    <StatMini label="Quality retention" value={formatPercent(item.metrics.quality_retention)} />
+                  </div>
+                  <p className="mt-3 text-xs text-ink-muted">
+                    Total {formatCost(item.metrics.total_cost)} · P95 {formatMs(item.metrics.p95_latency_ms)} · Strong
+                    usage {formatPercent(item.metrics.strong_model_usage, 0)}
+                  </p>
+                </Card>
+              ))}
+            </div>
+          </section>
+
+          <section>
+            <h3 className="mb-3 text-sm font-medium text-ink-primary">Comparison</h3>
+            <div className="mb-4">
+              <ComparisonCharts rows={chartRows} />
+            </div>
+            <ComparisonTable report={report} />
+          </section>
+
+          <section>
+            <Interpretation report={report} />
+          </section>
+
+          <SampleTable report={report} />
+        </div>
+      )}
+
+      <section>
+        <div className="mb-3 flex items-center gap-2">
+          <History className="h-4 w-4 text-ink-secondary" />
+          <h3 className="text-sm font-medium text-ink-primary">Recent benchmarks</h3>
+        </div>
+        {historyError && <ErrorBanner message={historyError} variant="warning" />}
+        {historyLoading || history.length > 0 ? (
+          <TableContainer>
+            <Table>
+              <THead>
+                <Tr>
+                  <Th>Run</Th>
+                  <Th>Dataset</Th>
+                  <Th>Quality floor</Th>
+                  <Th>Strategies</Th>
+                  <Th />
+                </Tr>
+              </THead>
+              <TBody>
+                {historyLoading ? (
+                  <Tr className="hover:bg-transparent">
+                    <Td className="text-ink-muted">Loading recent reports…</Td>
+                    <Td />
+                    <Td />
+                    <Td />
+                    <Td />
+                  </Tr>
+                ) : (
+                  history.slice(0, 8).map((item) => {
+                    const selected = report?.id === item.id;
+                    return (
+                      <Tr key={item.id} className={selected ? 'bg-brand-500/10' : undefined}>
+                        <Td className="text-ink-secondary">{formatTimestamp(item.created_at)}</Td>
+                        <Td className="max-w-[240px] truncate font-mono text-xs text-ink-secondary" title={item.dataset_path}>
+                          {item.dataset_path}
+                        </Td>
+                        <Td className="text-ink-secondary">{formatPercent(item.quality_floor, 0)}</Td>
+                        <Td>
+                          <div className="flex flex-wrap gap-1">
+                            {item.strategies.map((strategy) => (
+                              <Badge key={strategy.strategy} variant={strategyBadge(strategy.strategy)}>
+                                {strategyLabel(strategy.strategy)}
+                              </Badge>
+                            ))}
+                          </div>
+                        </Td>
+                        <Td>
+                          <Button variant="ghost" size="sm" disabled={running} onClick={() => void loadReport(item.id)}>
+                            {selected ? 'Viewing' : 'Open'}
+                          </Button>
+                        </Td>
+                      </Tr>
+                    );
+                  })
+                )}
+              </TBody>
+            </Table>
+          </TableContainer>
+        ) : !historyError ? (
+          <EmptyState
+            icon={History}
+            title="No saved reports"
+            description="Completed evaluations appear here so you can reopen a previous run."
+          />
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
+function StatMini({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-[11px] text-ink-muted">{label}</p>
+      <p className="mt-0.5 text-sm font-medium text-ink-primary">{value}</p>
     </div>
   );
 }

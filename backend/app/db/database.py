@@ -35,6 +35,57 @@ CREATE TABLE IF NOT EXISTS benchmark_reports (
     quality_floor REAL NOT NULL,
     report_json TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS jobs (
+    job_id TEXT PRIMARY KEY,
+    job_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    progress REAL NOT NULL DEFAULT 0.0,
+    error TEXT,
+    result_json TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_job_type ON jobs (job_type);
+
+CREATE TABLE IF NOT EXISTS model_outcomes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    recorded_at REAL NOT NULL,
+    request_id TEXT,
+    model_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model_tier TEXT,
+    task_type TEXT,
+    difficulty REAL,
+    stage TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    success INTEGER NOT NULL,
+    error_code TEXT,
+    latency_ms REAL,
+    estimated_cost REAL,
+    quality_score REAL,
+    fallback_used INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_outcomes_model_time ON model_outcomes (model_id, recorded_at);
+CREATE INDEX IF NOT EXISTS idx_model_outcomes_task_time ON model_outcomes (task_type, recorded_at);
+CREATE INDEX IF NOT EXISTS idx_model_outcomes_request_id ON model_outcomes (request_id);
+
+CREATE TABLE IF NOT EXISTS model_health (
+    model_id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'closed',
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    recent_failures INTEGER NOT NULL DEFAULT 0,
+    recent_successes INTEGER NOT NULL DEFAULT 0,
+    opened_at REAL,
+    last_success REAL,
+    last_failure REAL,
+    last_error TEXT
+);
 """
 
 MIGRATIONS = [
@@ -42,6 +93,15 @@ MIGRATIONS = [
     "ALTER TABLE routing_logs ADD COLUMN fallback_attempts INTEGER DEFAULT 1",
     "ALTER TABLE routing_logs ADD COLUMN original_model TEXT",
     "ALTER TABLE routing_logs ADD COLUMN fallback_reason TEXT",
+    # Request metadata for scoped usage reporting. Pre-existing rows get NULLs.
+    "ALTER TABLE routing_logs ADD COLUMN request_id TEXT",
+    "ALTER TABLE routing_logs ADD COLUMN user_id TEXT",
+    "ALTER TABLE routing_logs ADD COLUMN session_id TEXT",
+    "ALTER TABLE routing_logs ADD COLUMN tags_json TEXT",
+    "ALTER TABLE routing_logs ADD COLUMN preferred_model TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_routing_logs_user_id ON routing_logs (user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_routing_logs_session_id ON routing_logs (session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_routing_logs_request_id ON routing_logs (request_id)",
 ]
 
 

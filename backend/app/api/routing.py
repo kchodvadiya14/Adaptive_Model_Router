@@ -5,6 +5,8 @@ from fastapi import APIRouter, HTTPException, status
 from app.config.settings import get_settings
 from app.models.registry import get_model_registry
 from app.router.base import get_router
+from app.router.capabilities import NoCapableModelError
+from app.router.policy import PreferredModelUnavailableError
 from app.schemas.models import RouterStatusResponse
 from app.schemas.routing import RouteRequestWithConfig, RoutingDecision
 
@@ -35,8 +37,12 @@ def get_router_status() -> RouterStatusResponse:
 def route_prompt(request: RouteRequestWithConfig) -> RoutingDecision:
     """Analyze a prompt and return an explainable routing decision."""
     router = get_router()
-    configuration = request.configuration.model_dump(exclude_none=True) if request.configuration else None
+    configuration = request.routing_configuration()
     try:
         return router.route(request, configuration=configuration)
+    except PreferredModelUnavailableError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except NoCapableModelError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc

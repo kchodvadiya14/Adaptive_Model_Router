@@ -36,6 +36,8 @@ def to_chat_request(
     request: OpenAIChatCompletionRequest,
     *,
     quality_floor: float | None = None,
+    request_id: str | None = None,
+    timeout_ms: int | None = None,
 ) -> ChatRequest:
     messages: list[ChatMessage] = []
     for message in request.messages:
@@ -54,6 +56,11 @@ def to_chat_request(
         max_tokens=request.max_tokens or 1024,
         temperature=request.temperature if request.temperature is not None else 0.7,
         quality_floor=quality_floor,
+        tools=request.tools,
+        request_id=request_id or None,
+        user_id=request.user or None,
+        tags=request.metadata or None,
+        timeout_ms=timeout_ms,
     )
 
 
@@ -71,6 +78,7 @@ def to_openai_response(chat: ChatResponse) -> OpenAIChatCompletionResponse:
             fallback_used=bool(chat.fallback and chat.fallback.used),
             actual_cost=chat.cost.total_cost,
             latency_ms=chat.latency_ms,
+            request_id=chat.request_id,
         )
 
     return OpenAIChatCompletionResponse(

@@ -12,7 +12,7 @@ export function JobProgressBar({ progress, label = 'Running...' }: JobProgressBa
         <span>{label}</span>
         <span>{pct}%</span>
       </div>
-      <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+      <div className="h-2 overflow-hidden rounded-full bg-surface-3">
         <div
           className="h-full rounded-full bg-brand-500 transition-all duration-300"
           style={{ width: `${pct}%` }}

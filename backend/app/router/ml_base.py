@@ -7,12 +7,16 @@ from typing import Any
 from app.config.settings import Settings, get_settings
 from app.models.registry import get_model_registry
 from app.router.base import Router
+from app.router.capabilities import requirements_from_configuration
+from app.router.constraints import constraints_from_configuration, preferred_model_from_configuration
 from app.router.difficulty import estimate_difficulty
 from app.router.features import extract_features
 from app.router.policy import (
     build_explanation_bullets,
     evaluate_tiers,
+    filter_eligible_tiers,
     get_policy_config,
+    resolve_preferred_model,
 )
 from app.router.task_classifier import classify_task
 from app.schemas.models import ModelTier
@@ -58,6 +62,10 @@ class MLRouter(Router):
             if "routing_threshold" in configuration:
                 threshold = float(configuration["routing_threshold"])
 
+        requirements = requirements_from_configuration(configuration)
+        constraints = constraints_from_configuration(configuration)
+        preferred_model_id = preferred_model_from_configuration(configuration)
+
         features = extract_features(request.prompt)
         task_type, task_confidence = classify_task(features)
         difficulty = estimate_difficulty(features, task_type)
@@ -70,10 +78,33 @@ class MLRouter(Router):
             difficulty=difficulty,
             registry=self.registry,
             policy=policy,
+            requirements=requirements,
+            constraints=constraints,
         )
-        selected_eval = next((item for item in evaluations if item.tier == selected_tier and item.model), None)
-        if not selected_eval or not selected_eval.model:
-            selected_eval = next(item for item in evaluations if item.model)
+
+        preferred_eval, preferred_reason = None, None
+        if preferred_model_id:
+            preferred_eval, preferred_reason = resolve_preferred_model(
+                preferred_model_id,
+                self.registry,
+                request.prompt,
+                task_type,
+                difficulty,
+                policy,
+                requirements,
+                constraints,
+            )
+
+        if preferred_eval is not None:
+            selected_eval = preferred_eval
+        else:
+            # Hard capability + health + constraint filter first (see
+            # policy.filter_eligible_tiers), then the model's predicted tier, then the first
+            # remaining eligible tier (same order-based fallback as before filtering existed).
+            capable = filter_eligible_tiers(evaluations, requirements, constraints)
+            selected_eval = next((item for item in capable if item.tier == selected_tier), None)
+            if not selected_eval:
+                selected_eval = capable[0]
 
         strong_eval = next((item for item in evaluations if item.tier == ModelTier.STRONG and item.model), None)
         strong_cost = strong_eval.estimated_cost if strong_eval else selected_eval.estimated_cost
@@ -96,6 +127,10 @@ class MLRouter(Router):
             policy=policy,
             evaluations=evaluations,
             selected=selected_eval,
+            requirements=requirements,
+            constraints=constraints,
+            preferred_model_id=preferred_model_id,
+            preferred_model_reason=preferred_reason,
         )
         explanation.insert(
             0,
@@ -123,4 +158,6 @@ class MLRouter(Router):
                 "probability_strong_better": prob,
                 "router_type": self.router_type.value,
             },
+            preferred_model=preferred_model_id,
+            preferred_model_honored=(preferred_eval is not None) if preferred_model_id else None,
         )

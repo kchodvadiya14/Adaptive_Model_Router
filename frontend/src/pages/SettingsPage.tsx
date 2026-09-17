@@ -1,110 +1,353 @@
-import { useEffect, useState } from 'react';
-import { ExternalLink } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import type { LucideIcon } from 'lucide-react';
+import {
+  Activity,
+  ArrowRight,
+  Bot,
+  ExternalLink,
+  FlaskConical,
+  HeartPulse,
+  Route,
+  ShieldCheck,
+} from 'lucide-react';
+import { Badge } from '../components/Badge';
+import { Button } from '../components/Button';
+import { Card } from '../components/Card';
+import { ErrorBanner } from '../components/ErrorBanner';
 import { PageHeader } from '../components/PageHeader';
-import { StatCard } from '../components/StatCard';
-import { fetchHealth, fetchRouterStatus } from '../services/api';
-import type { HealthResponse, RouterStatusResponse } from '../types';
+import { fetchHealth, fetchModelHealth, fetchModels, fetchRouterStatus } from '../services/api';
+import type { HealthResponse, ModelHealthStatus, ModelMetadata, RouterStatusResponse } from '../types';
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
+
+function SkeletonBlock({ className = '' }: { className?: string }) {
+  return <div className={`animate-pulse rounded-lg bg-surface-3 ${className}`} />;
+}
+
+interface SettingRowProps {
+  label: string;
+  description?: string;
+  value?: React.ReactNode;
+  unavailable?: boolean;
+  envVar?: string;
+}
+
+function SettingRow({ label, description, value, unavailable, envVar }: SettingRowProps) {
+  return (
+    <div className="flex flex-col gap-1 border-b border-line-subtle py-3 last:border-b-0 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
+      <div className="sm:max-w-[65%]">
+        <p className="text-sm text-ink-primary">{label}</p>
+        {description && <p className="mt-0.5 text-xs text-ink-muted">{description}</p>}
+      </div>
+      <div className="flex shrink-0 items-center gap-2 sm:justify-end">
+        {unavailable ? (
+          <div className="flex flex-col items-start gap-1 sm:items-end">
+            <Badge variant="neutral">Not exposed via API</Badge>
+            {envVar && <span className="font-mono text-[11px] text-ink-disabled">{envVar}</span>}
+          </div>
+        ) : (
+          <span className="text-sm font-medium text-ink-primary">{value ?? '—'}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface SectionCardProps {
+  title: string;
+  description?: string;
+  icon: LucideIcon;
+  children: React.ReactNode;
+}
+
+function SectionCard({ title, description, icon: Icon, children }: SectionCardProps) {
+  return (
+    <Card>
+      <div className="mb-1 flex items-center gap-2">
+        <Icon className="h-4 w-4 text-ink-secondary" />
+        <h3 className="text-sm font-medium text-ink-primary">{title}</h3>
+      </div>
+      {description && <p className="mb-2 text-xs text-ink-muted">{description}</p>}
+      <div>{children}</div>
+    </Card>
+  );
+}
 
 export function SettingsPage() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [routerStatus, setRouterStatus] = useState<RouterStatusResponse | null>(null);
+  const [models, setModels] = useState<ModelMetadata[]>([]);
+  const [modelHealth, setModelHealth] = useState<ModelHealthStatus[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [healthData, statusData, modelsData, healthList] = await Promise.all([
+        fetchHealth().catch(() => null),
+        fetchRouterStatus().catch(() => null),
+        fetchModels().catch(() => []),
+        fetchModelHealth().catch(() => []),
+      ]);
+      setHealth(healthData);
+      setRouterStatus(statusData);
+      setModels(modelsData);
+      setModelHealth(healthList);
+      setError(null);
+    } catch {
+      setError('Failed to load gateway configuration. Ensure the backend is running.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    fetchHealth().then(setHealth).catch(() => setHealth(null));
-    fetchRouterStatus().then(setRouterStatus).catch(() => setRouterStatus(null));
-  }, []);
+    load();
+  }, [load]);
+
+  const isOnline = health?.status === 'ok';
+
+  const providerSummary = models.reduce<Record<string, { total: number; enabled: number }>>((acc, model) => {
+    const entry = acc[model.provider] ?? { total: 0, enabled: 0 };
+    entry.total += 1;
+    if (model.enabled) entry.enabled += 1;
+    acc[model.provider] = entry;
+    return acc;
+  }, {});
+
+  const healthyCount = modelHealth.filter((m) => m.state === 'closed').length;
+  const openCount = modelHealth.filter((m) => m.state === 'open').length;
+  const halfOpenCount = modelHealth.filter((m) => m.state === 'half_open').length;
 
   return (
     <div>
       <PageHeader
-        title="Settings"
-        description="Environment configuration and system status. Runtime changes require editing .env and restarting the backend."
+        title="Gateway Configuration"
+        description="How the Adaptive AI Gateway is configured, and what's safe to change from here."
         action={
-          <a
-            href="http://localhost:8000/docs"
-            target="_blank"
-            rel="noreferrer"
-            className="flex items-center gap-2 rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800"
-          >
-            <ExternalLink className="h-4 w-4" />
-            API Docs
+          <a href={`${API_BASE_URL}/docs`} target="_blank" rel="noreferrer">
+            <Button variant="secondary" size="sm">
+              <ExternalLink className="h-4 w-4" />
+              API Docs
+            </Button>
           </a>
         }
       />
 
-      <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          label="Backend Status"
-          value={health?.status ?? 'offline'}
-          subtext={health ? `${health.app_name} v${health.version}` : 'Start backend on port 8000'}
-        />
-        <StatCard label="Environment" value={health?.environment ?? '—'} subtext="APP_ENV" />
-        <StatCard label="Router Type" value={routerStatus?.router_type ?? '—'} subtext="ROUTER_TYPE" />
-        <StatCard
-          label="Models Enabled"
-          value={routerStatus ? `${routerStatus.enabled_models}/${routerStatus.total_models}` : '—'}
-        />
-      </div>
+      {error && <ErrorBanner message={error} variant="error" />}
 
-      {routerStatus && (
-        <div className="mb-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-6">
-            <h3 className="text-sm font-medium text-white">Routing Policy</h3>
-            <dl className="mt-4 space-y-2 text-sm">
-              <div className="flex justify-between"><dt className="text-slate-400">Quality Floor</dt><dd className="text-white">{(routerStatus.quality_floor * 100).toFixed(0)}%</dd></div>
-              <div className="flex justify-between"><dt className="text-slate-400">Cost Priority</dt><dd className="text-white">{routerStatus.cost_priority}</dd></div>
-              <div className="flex justify-between"><dt className="text-slate-400">Latency Priority</dt><dd className="text-white">{routerStatus.latency_priority}</dd></div>
-            </dl>
+      {/* Compact gateway status strip */}
+      <Card className="mb-6">
+        {loading ? (
+          <div className="flex flex-wrap items-center gap-6">
+            <SkeletonBlock className="h-6 w-32" />
+            <SkeletonBlock className="h-6 w-24" />
+            <SkeletonBlock className="h-6 w-24" />
           </div>
-          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-6">
-            <h3 className="text-sm font-medium text-white">Fallback Configuration</h3>
-            <dl className="mt-4 space-y-2 text-sm">
-              <div className="flex justify-between"><dt className="text-slate-400">Enabled</dt><dd className="text-white">{routerStatus.fallback_enabled ? 'Yes' : 'No'}</dd></div>
-              <div className="flex justify-between"><dt className="text-slate-400">Max Attempts</dt><dd className="text-white">{routerStatus.max_fallback_attempts}</dd></div>
-              <div className="flex justify-between"><dt className="text-slate-400">Quality Threshold</dt><dd className="text-white">{routerStatus.fallback_on_quality_below != null ? `${(routerStatus.fallback_on_quality_below * 100).toFixed(0)}%` : 'Disabled'}</dd></div>
-              <div className="flex justify-between"><dt className="text-slate-400">Escalation</dt><dd className="text-white">{routerStatus.fallback_escalation}</dd></div>
-            </dl>
+        ) : (
+          <div className="flex flex-wrap items-center gap-x-8 gap-y-3 text-sm">
+            <div className="flex items-center gap-2">
+              <Badge variant={isOnline ? 'success' : 'error'}>
+                <span
+                  className={`mr-1.5 h-1.5 w-1.5 rounded-full ${isOnline ? 'bg-success-400' : 'bg-danger-400'}`}
+                />
+                {isOnline ? 'Gateway Online' : 'Gateway Offline'}
+              </Badge>
+            </div>
+            <div>
+              <span className="text-ink-muted">Application</span>{' '}
+              <span className="text-ink-primary">{health?.app_name ?? '—'}</span>
+            </div>
+            <div>
+              <span className="text-ink-muted">Version</span>{' '}
+              <span className="text-ink-primary">{health?.version ?? '—'}</span>
+            </div>
+            <div>
+              <span className="text-ink-muted">Environment</span>{' '}
+              <span className="capitalize text-ink-primary">{health?.environment ?? '—'}</span>
+            </div>
+            <div>
+              <span className="text-ink-muted">Router</span>{' '}
+              <span className="text-ink-primary">{routerStatus?.router_type ?? '—'}</span>
+            </div>
           </div>
+        )}
+      </Card>
+
+      {loading ? (
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Card key={i}>
+              <SkeletonBlock className="h-4 w-32" />
+              <SkeletonBlock className="mt-4 h-24 w-full" />
+            </Card>
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+          {/* Gateway */}
+          <SectionCard icon={ShieldCheck} title="Gateway" description="Runtime identity and access control for this deployment.">
+            <SettingRow
+              label="Status"
+              value={
+                <Badge variant={isOnline ? 'success' : 'error'}>{health?.status ?? 'unknown'}</Badge>
+              }
+            />
+            <SettingRow label="Environment" value={health?.environment ?? '—'} description="APP_ENV" />
+            <SettingRow
+              label="Bearer Authentication"
+              description="Optional token required on /v1/* OpenAI-compatible endpoints."
+              unavailable
+              envVar="ROUTER_API_KEY"
+            />
+          </SectionCard>
+
+          {/* Routing */}
+          <SectionCard icon={Route} title="Routing" description="How the gateway picks a model for each request.">
+            <SettingRow label="Active Strategy" value={routerStatus?.router_type ?? '—'} />
+            <SettingRow
+              label="Quality Floor"
+              description="Minimum acceptable response quality before escalation."
+              value={routerStatus ? `${(routerStatus.quality_floor * 100).toFixed(0)}%` : '—'}
+            />
+            <SettingRow
+              label="Cost Priority"
+              description="Weight given to cost when comparing candidate models."
+              value={routerStatus?.cost_priority ?? '—'}
+            />
+            <SettingRow
+              label="Latency Priority"
+              description="Weight given to latency when comparing candidate models."
+              value={routerStatus?.latency_priority ?? '—'}
+            />
+            <SettingRow
+              label="Routing Threshold"
+              description="Confidence threshold used by ML-based routers (tfidf / embedding / bert)."
+              unavailable
+              envVar="ROUTING_THRESHOLD"
+            />
+            <SettingRow
+              label="Fallback"
+              value={routerStatus ? (routerStatus.fallback_enabled ? 'Enabled' : 'Disabled') : '—'}
+            />
+            <SettingRow label="Max Fallback Attempts" value={routerStatus?.max_fallback_attempts ?? '—'} />
+            <SettingRow
+              label="Fallback Quality Threshold"
+              value={
+                routerStatus?.fallback_on_quality_below != null
+                  ? `${(routerStatus.fallback_on_quality_below * 100).toFixed(0)}%`
+                  : 'Disabled'
+              }
+            />
+            <SettingRow label="Escalation Strategy" value={routerStatus?.fallback_escalation ?? '—'} />
+          </SectionCard>
+
+          {/* Models & Providers */}
+          <SectionCard icon={Bot} title="Models & Providers" description="Registered models available for routing.">
+            <SettingRow
+              label="Enabled Models"
+              value={routerStatus ? `${routerStatus.enabled_models} / ${routerStatus.total_models}` : '—'}
+            />
+            {Object.keys(providerSummary).length === 0 ? (
+              <p className="py-3 text-sm text-ink-muted">No models registered yet.</p>
+            ) : (
+              Object.entries(providerSummary).map(([provider, counts]) => (
+                <SettingRow
+                  key={provider}
+                  label={provider}
+                  value={`${counts.enabled} / ${counts.total} enabled`}
+                />
+              ))
+            )}
+            <SettingRow
+              label="Provider Credentials"
+              description="API key presence isn't exposed via any endpoint. Verify OPENAI_API_KEY / ANTHROPIC_API_KEY / GOOGLE_API_KEY in the backend environment."
+              unavailable
+            />
+            <Link to="/models" className="mt-3 inline-block">
+              <Button variant="ghost" size="sm">
+                Open Model Registry
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Button>
+            </Link>
+          </SectionCard>
+
+          {/* Health & Reliability */}
+          <SectionCard
+            icon={HeartPulse}
+            title="Health & Reliability"
+            description="Circuit-breaker behavior that isolates failing models."
+          >
+            <SettingRow
+              label="Live Circuit State"
+              value={
+                <div className="flex items-center gap-1.5">
+                  <Badge variant="closed">{healthyCount} healthy</Badge>
+                  {(openCount > 0 || halfOpenCount > 0) && (
+                    <>
+                      <Badge variant="half_open">{halfOpenCount} recovering</Badge>
+                      <Badge variant="open">{openCount} open</Badge>
+                    </>
+                  )}
+                </div>
+              }
+            />
+            <SettingRow
+              label="Failure Threshold"
+              description="Consecutive failures before a model's circuit opens."
+              unavailable
+              envVar="HEALTH_FAILURE_THRESHOLD"
+            />
+            <SettingRow
+              label="Cooldown Period"
+              description="Time an open circuit waits before a health-check retry."
+              unavailable
+              envVar="HEALTH_COOLDOWN_SECONDS"
+            />
+            <Link to="/" className="mt-3 inline-block">
+              <Button variant="ghost" size="sm">
+                View Model Health
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Button>
+            </Link>
+          </SectionCard>
+
+          {/* Evaluation */}
+          <SectionCard
+            icon={FlaskConical}
+            title="Evaluation"
+            description="Automated response quality scoring."
+          >
+            <SettingRow
+              label="Judge Provider"
+              description="LLM used to score response quality."
+              unavailable
+              envVar="JUDGE_PROVIDER"
+            />
+            <SettingRow label="Judge Model" unavailable envVar="JUDGE_MODEL_ID" />
+            <SettingRow
+              label="Evaluate on Chat"
+              description="Whether every chat response is auto-scored."
+              unavailable
+              envVar="EVALUATE_ON_CHAT"
+            />
+            <p className="mt-2 text-xs text-ink-muted">
+              On-demand scoring is always available via the Chat Playground&rsquo;s Evaluate Response action.
+            </p>
+          </SectionCard>
+
+          {/* API & Integration */}
+          <SectionCard icon={Activity} title="API & Integration" description="Programmatic access to this gateway.">
+            <SettingRow label="Interactive API Docs" value={`${API_BASE_URL || '(same origin)'}/docs`} />
+            <SettingRow label="OpenAI-Compatible Endpoint" value={`${API_BASE_URL || '(same origin)'}/v1`} />
+            <SettingRow label="Chat Completions" value="POST /v1/chat/completions" />
+            <SettingRow label="List Models" value="GET /v1/models" />
+            <SettingRow label="Quality Override Header" value="X-Quality-Floor" />
+          </SectionCard>
         </div>
       )}
-
-      <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-6">
-        <h3 className="text-sm font-medium text-white">Environment Variables</h3>
-        <p className="mt-2 text-sm text-slate-400">
-          Copy <code className="text-brand-100">.env.example</code> to <code className="text-brand-100">.env</code> and
-          configure API keys for providers you want to use. Never commit real credentials.
-        </p>
-        <div className="mt-4 grid grid-cols-1 gap-6 md:grid-cols-2">
-          <ul className="space-y-1 text-sm text-slate-500">
-            <li>OPENAI_API_KEY — OpenAI models</li>
-            <li>ANTHROPIC_API_KEY — Anthropic models</li>
-            <li>GOOGLE_API_KEY — Google Gemini models</li>
-            <li>ROUTER_TYPE — rule_based | tfidf | embedding | bert</li>
-            <li>QUALITY_FLOOR — minimum acceptable quality (default 0.90)</li>
-          </ul>
-          <ul className="space-y-1 text-sm text-slate-500">
-            <li>COST_PRIORITY / LATENCY_PRIORITY — routing optimization weights</li>
-            <li>FALLBACK_ENABLED — retry with higher tier on provider errors</li>
-            <li>MAX_FALLBACK_ATTEMPTS — max models to try (default 3)</li>
-            <li>FALLBACK_ON_QUALITY_BELOW — escalate when judge score is low</li>
-            <li>EVALUATE_ON_CHAT — post-response quality scoring</li>
-            <li>ROUTER_API_KEY — optional bearer auth for /v1/* endpoints</li>
-          </ul>
-        </div>
-      </div>
-
-      <div className="mt-8 rounded-xl border border-slate-800 bg-slate-900/60 p-6">
-        <h3 className="text-sm font-medium text-white">OpenAI-Compatible API</h3>
-        <p className="mt-2 text-sm text-slate-400">
-          Point any OpenAI SDK to <code className="text-brand-100">http://localhost:8000/v1</code> and use{' '}
-          <code className="text-brand-100">model: &quot;auto&quot;</code> for adaptive routing.
-        </p>
-        <ul className="mt-3 space-y-1 text-sm text-slate-500">
-          <li>POST /v1/chat/completions — OpenAI chat completions format</li>
-          <li>GET /v1/models — list enabled models + auto</li>
-          <li>X-Quality-Floor header — per-request quality override</li>
-        </ul>
-      </div>
     </div>
   );
 }

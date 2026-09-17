@@ -37,9 +37,15 @@ def log_routing_event(
     fallback_attempts: int = 1,
     original_model: str | None = None,
     fallback_reason: str | None = None,
+    request_id: str | None = None,
+    user_id: str | None = None,
+    session_id: str | None = None,
+    tags: dict[str, str] | None = None,
+    preferred_model: str | None = None,
 ) -> int:
     prompt_hash = _hash_prompt(prompt if store_prompt else prompt[:128])
     timestamp = datetime.now(UTC).isoformat()
+    tags_json = json.dumps(tags, sort_keys=True) if tags else None
     with get_connection() as conn:
         cursor = conn.execute(
             """
@@ -48,8 +54,9 @@ def log_routing_event(
                 selected_model, model_tier, estimated_cost, actual_cost,
                 estimated_quality, actual_quality, latency_ms, routed,
                 strong_baseline_cost, input_tokens, output_tokens,
-                fallback_used, fallback_attempts, original_model, fallback_reason
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                fallback_used, fallback_attempts, original_model, fallback_reason,
+                request_id, user_id, session_id, tags_json, preferred_model
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 timestamp,
@@ -72,10 +79,48 @@ def log_routing_event(
                 fallback_attempts,
                 original_model,
                 fallback_reason,
+                request_id,
+                user_id,
+                session_id,
+                tags_json,
+                preferred_model,
             ),
         )
         conn.commit()
         return int(cursor.lastrowid)
+
+
+def list_routing_logs_for_usage(
+    *,
+    user_id: str | None = None,
+    session_id: str | None = None,
+    model_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Routing-log rows for usage reporting, filtered in SQL on the indexed columns.
+    Tag filtering happens in the usage service (tags are stored as JSON)."""
+    clauses: list[str] = []
+    params: list[Any] = []
+    if user_id is not None:
+        clauses.append("user_id = ?")
+        params.append(user_id)
+    if session_id is not None:
+        clauses.append("session_id = ?")
+        params.append(session_id)
+    if model_id is not None:
+        clauses.append("selected_model = ?")
+        params.append(model_id)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT request_id, user_id, session_id, tags_json, preferred_model,
+                   selected_model, actual_cost, latency_ms, fallback_used
+            FROM routing_logs {where}
+            ORDER BY id
+            """,
+            params,
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def get_metrics_summary() -> MetricsSummary:

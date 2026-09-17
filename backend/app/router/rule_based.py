@@ -7,12 +7,15 @@ from typing import Any
 from app.config.settings import Settings, get_settings
 from app.models.registry import get_model_registry
 from app.router.base import Router
+from app.router.capabilities import requirements_from_configuration
+from app.router.constraints import constraints_from_configuration, preferred_model_from_configuration
 from app.router.difficulty import estimate_difficulty
 from app.router.features import extract_features
 from app.router.policy import (
     build_explanation_bullets,
     evaluate_tiers,
     get_policy_config,
+    resolve_preferred_model,
     select_model_from_evaluations,
 )
 from app.router.task_classifier import classify_task
@@ -36,6 +39,10 @@ class RuleBasedRouter(Router):
             if "latency_priority" in configuration:
                 policy.latency_priority = float(configuration["latency_priority"])
 
+        requirements = requirements_from_configuration(configuration)
+        constraints = constraints_from_configuration(configuration)
+        preferred_model_id = preferred_model_from_configuration(configuration)
+
         features = extract_features(request.prompt)
         task_type, task_confidence = classify_task(features)
         difficulty = estimate_difficulty(features, task_type)
@@ -45,8 +52,29 @@ class RuleBasedRouter(Router):
             difficulty=difficulty,
             registry=self.registry,
             policy=policy,
+            requirements=requirements,
+            constraints=constraints,
         )
-        selected = select_model_from_evaluations(evaluations, policy)
+
+        preferred_eval, preferred_reason = None, None
+        if preferred_model_id:
+            preferred_eval, preferred_reason = resolve_preferred_model(
+                preferred_model_id,
+                self.registry,
+                request.prompt,
+                task_type,
+                difficulty,
+                policy,
+                requirements,
+                constraints,
+            )
+
+        if preferred_eval is not None:
+            selected = preferred_eval
+        else:
+            selected = select_model_from_evaluations(
+                evaluations, policy, requirements=requirements, constraints=constraints
+            )
 
         if not selected.model:
             raise ValueError("No model available for routing.")
@@ -73,6 +101,10 @@ class RuleBasedRouter(Router):
             policy=policy,
             evaluations=evaluations,
             selected=selected,
+            requirements=requirements,
+            constraints=constraints,
+            preferred_model_id=preferred_model_id,
+            preferred_model_reason=preferred_reason,
         )
 
         if features.has_code:
@@ -108,4 +140,6 @@ class RuleBasedRouter(Router):
                 "reasoning_score": features.reasoning_score,
                 "requested_output_format": features.requested_output_format,
             },
+            preferred_model=preferred_model_id,
+            preferred_model_honored=(preferred_eval is not None) if preferred_model_id else None,
         )

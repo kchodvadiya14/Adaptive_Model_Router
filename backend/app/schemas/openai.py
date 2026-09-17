@@ -29,6 +29,15 @@ class OpenAIChatCompletionRequest(BaseModel):
     max_tokens: int | None = Field(default=None, ge=1, le=8192)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     stream: bool = False
+    tools: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="OpenAI-style tool/function definitions, used for capability-aware routing.",
+    )
+    user: str | None = Field(default=None, description="OpenAI end-user identifier; recorded as user_id.")
+    metadata: dict[str, str] | None = Field(
+        default=None,
+        description="OpenAI request metadata key/value pairs; recorded as usage tags.",
+    )
 
     model_config = {"extra": "ignore"}
 
@@ -56,6 +65,7 @@ class OpenAIRouterMetadata(BaseModel):
     fallback_used: bool = False
     actual_cost: float | None = None
     latency_ms: float | None = None
+    request_id: str | None = None
 
 
 class OpenAIChatCompletionResponse(BaseModel):

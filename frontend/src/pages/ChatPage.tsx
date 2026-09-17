@@ -1,345 +1,507 @@
-import axios from 'axios';
-import { FormEvent, useCallback, useEffect, useState } from 'react';
-import { ClipboardCheck, Loader2, Route, Send, ShieldAlert } from 'lucide-react';
+import { KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ClipboardCheck, MessageSquare, RotateCcw, Route, Send } from 'lucide-react';
+import { Badge } from '../components/Badge';
+import { Button } from '../components/Button';
+import { Card } from '../components/Card';
+import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { Input } from '../components/Input';
 import { PageHeader } from '../components/PageHeader';
-import { StatCard } from '../components/StatCard';
-import { evaluateResponse, fetchModels, routePrompt, sendChat } from '../services/api';
-import type { ChatResponse, EvaluateResponse, ModelMetadata, RoutingDecision } from '../types';
+import { Select } from '../components/Select';
+import { evaluateResponse, fetchModelHealth, fetchModels, routePrompt, sendChat } from '../services/api';
+import type {
+  ChatMessage,
+  ChatRequest,
+  ChatResponse,
+  EvaluateResponse,
+  ModelHealthStatus,
+  ModelMetadata,
+  RoutingDecision,
+} from '../types';
+import { formatCost, formatMs } from './models/format';
+import { parseApiError } from './chat/apiError';
+import { CAPABILITY_TOOL_STUB, EXAMPLE_PROMPTS } from './chat/examples';
+import { RoutingPanel } from './chat/RoutingPanel';
 
 const AUTO_MODEL = 'auto';
 
+interface ConversationTurn {
+  id: string;
+  prompt: string;
+  response: ChatResponse | null;
+  error: string | null;
+  isTimeout: boolean;
+}
+
+function optionalNumber(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function newSessionId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `session-${Date.now()}`;
+}
+
 export function ChatPage() {
   const [models, setModels] = useState<ModelMetadata[]>([]);
+  const [healthByModel, setHealthByModel] = useState<Record<string, ModelHealthStatus>>({});
   const [selectedModel, setSelectedModel] = useState(AUTO_MODEL);
+  const [preferredModel, setPreferredModel] = useState('');
   const [prompt, setPrompt] = useState('');
-  const [qualityFloor, setQualityFloor] = useState<number | ''>('');
-  const [response, setResponse] = useState<ChatResponse | null>(null);
+  const [qualityFloor, setQualityFloor] = useState('');
+  const [maxCost, setMaxCost] = useState('');
+  const [maxLatency, setMaxLatency] = useState('');
+  const [timeoutMs, setTimeoutMs] = useState('');
+  const [requiresVision, setRequiresVision] = useState(false);
+  const [requiresTools, setRequiresTools] = useState(false);
+  const [sentCapabilities, setSentCapabilities] = useState<string[]>([]);
+  const [sessionId, setSessionId] = useState(newSessionId);
+  const [turns, setTurns] = useState<ConversationTurn[]>([]);
   const [evaluation, setEvaluation] = useState<EvaluateResponse | null>(null);
   const [previewRouting, setPreviewRouting] = useState<RoutingDecision | null>(null);
   const [loading, setLoading] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [evaluating, setEvaluating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorIsTimeout, setErrorIsTimeout] = useState(false);
+  const transcriptRef = useRef<HTMLDivElement>(null);
 
-  const loadModels = useCallback(async () => {
+  const isAuto = selectedModel === AUTO_MODEL;
+  const lastTurn = turns[turns.length - 1] ?? null;
+  const lastResponse = lastTurn?.response ?? null;
+  const routing = lastResponse?.routing ?? previewRouting;
+  const previewOnly = Boolean(previewRouting) && !lastResponse?.routing;
+
+  const selectedModelMeta = useMemo(() => {
+    const id = lastResponse?.model ?? routing?.selected_model;
+    return models.find((model) => model.id === id);
+  }, [lastResponse?.model, models, routing?.selected_model]);
+
+  const currentCapabilities = useMemo(() => {
+    const caps: string[] = [];
+    if (requiresVision) caps.push('vision');
+    if (requiresTools) caps.push('tools');
+    return caps;
+  }, [requiresTools, requiresVision]);
+
+  const loadCatalog = useCallback(async () => {
     try {
-      const data = await fetchModels(true);
-      setModels(data);
+      const [modelList, healthList] = await Promise.all([
+        fetchModels(true),
+        fetchModelHealth().catch(() => [] as ModelHealthStatus[]),
+      ]);
+      setModels(modelList);
+      setHealthByModel(Object.fromEntries(healthList.map((item) => [item.model_id, item])));
     } catch {
       setError('Failed to load models. Ensure the backend is running.');
+      setErrorIsTimeout(false);
     }
   }, []);
 
   useEffect(() => {
-    loadModels();
-  }, [loadModels]);
+    loadCatalog();
+  }, [loadCatalog]);
+
+  useEffect(() => {
+    const node = transcriptRef.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [turns, loading]);
+
+  const buildRequest = (content: string): ChatRequest => {
+    const messages: ChatMessage[] = [{ role: 'user', content, has_image: requiresVision || undefined }];
+    const timeout = optionalNumber(timeoutMs);
+    return {
+      model: selectedModel,
+      messages,
+      quality_floor: isAuto ? optionalNumber(qualityFloor) : undefined,
+      preferred_model: isAuto && preferredModel ? preferredModel : undefined,
+      max_cost: optionalNumber(maxCost),
+      max_latency_ms: optionalNumber(maxLatency),
+      timeout_ms: timeout !== undefined ? Math.round(timeout) : undefined,
+      tools: requiresTools ? CAPABILITY_TOOL_STUB : undefined,
+      session_id: sessionId,
+    };
+  };
 
   const handlePreviewRoute = async () => {
-    if (!prompt.trim()) return;
+    if (!prompt.trim() || !isAuto) return;
     setPreviewLoading(true);
     setError(null);
+    setErrorIsTimeout(false);
+    setSentCapabilities(currentCapabilities);
     try {
-      const config = qualityFloor !== '' ? { quality_floor: qualityFloor } : undefined;
-      const routing = await routePrompt(prompt.trim(), config);
-      setPreviewRouting(routing);
+      const floor = optionalNumber(qualityFloor);
+      const routingDecision = await routePrompt(
+        prompt.trim(),
+        floor !== undefined ? { quality_floor: floor } : undefined,
+        {
+          preferred_model: preferredModel || undefined,
+          max_cost: optionalNumber(maxCost),
+          max_latency_ms: optionalNumber(maxLatency),
+        },
+      );
+      setPreviewRouting(routingDecision);
     } catch (err: unknown) {
-      if (axios.isAxiosError(err)) {
-        const detail = err.response?.data?.detail;
-        setError(typeof detail === 'string' ? detail : 'Routing preview failed.');
-      } else {
-        setError('Routing preview failed.');
-      }
+      const parsed = parseApiError(err, 'Routing preview failed.');
+      setError(parsed.message);
+      setErrorIsTimeout(parsed.isTimeout);
     } finally {
       setPreviewLoading(false);
     }
   };
 
-  const handleSubmit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!prompt.trim()) return;
+  const handleSend = async () => {
+    const content = prompt.trim();
+    if (!content || loading) return;
 
     setLoading(true);
     setError(null);
-    setResponse(null);
+    setErrorIsTimeout(false);
     setEvaluation(null);
+    setPreviewRouting(null);
+    setSentCapabilities(currentCapabilities);
+
+    const turnId = `${Date.now()}`;
+    setTurns((current) => [...current, { id: turnId, prompt: content, response: null, error: null, isTimeout: false }]);
+    setPrompt('');
 
     try {
-      const result = await sendChat({
-        model: selectedModel,
-        messages: [{ role: 'user', content: prompt.trim() }],
-        quality_floor: qualityFloor !== '' ? qualityFloor : undefined,
-      });
-      setResponse(result);
-      setPreviewRouting(result.routing);
+      const result = await sendChat(buildRequest(content));
+      setTurns((current) =>
+        current.map((turn) => (turn.id === turnId ? { ...turn, response: result } : turn)),
+      );
     } catch (err: unknown) {
-      if (axios.isAxiosError(err)) {
-        const detail = err.response?.data?.detail;
-        setError(typeof detail === 'string' ? detail : 'Chat request failed.');
-      } else {
-        setError('Chat request failed.');
-      }
+      const parsed = parseApiError(err, 'Chat request failed.');
+      setError(parsed.message);
+      setErrorIsTimeout(parsed.isTimeout);
+      setTurns((current) =>
+        current.map((turn) =>
+          turn.id === turnId ? { ...turn, error: parsed.message, isTimeout: parsed.isTimeout } : turn,
+        ),
+      );
     } finally {
       setLoading(false);
     }
   };
 
+  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      void handleSend();
+    }
+  };
+
   const handleEvaluate = async () => {
-    if (!response || !prompt.trim()) return;
+    if (!lastResponse || !lastTurn?.prompt) return;
     setEvaluating(true);
     try {
-      const result = await evaluateResponse(prompt.trim(), response.content);
+      const result = await evaluateResponse(lastTurn.prompt, lastResponse.content);
       setEvaluation(result);
-    } catch {
-      setError('Evaluation failed.');
+    } catch (err: unknown) {
+      const parsed = parseApiError(err, 'Evaluation failed.');
+      setError(parsed.message);
+      setErrorIsTimeout(parsed.isTimeout);
     } finally {
       setEvaluating(false);
     }
   };
 
-  const routing = response?.routing ?? previewRouting;
-  const isAuto = selectedModel === AUTO_MODEL;
+  const handleNewConversation = () => {
+    setTurns([]);
+    setPrompt('');
+    setEvaluation(null);
+    setPreviewRouting(null);
+    setError(null);
+    setErrorIsTimeout(false);
+    setSessionId(newSessionId());
+    setSentCapabilities([]);
+  };
 
   return (
     <div>
       <PageHeader
-        title="Chat"
-        description="Adaptive model routing analyzes your prompt and selects the best cost/latency trade-off that meets the quality floor."
+        title="Gateway Playground"
+        description="Send a prompt through the LLM gateway: routing decides the model, then you see the response and the explanation."
+        action={
+          <Button variant="secondary" onClick={handleNewConversation} disabled={loading}>
+            <RotateCcw className="h-4 w-4" />
+            New conversation
+          </Button>
+        }
       />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
-          <form onSubmit={handleSubmit} className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+          <Card>
             <div className="mb-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-              <label className="block text-sm text-slate-400">
+              <label className="block text-sm text-ink-secondary">
                 Model
-                <select
+                <Select
+                  className="mt-2"
                   value={selectedModel}
-                  onChange={(e) => setSelectedModel(e.target.value)}
-                  className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                  onChange={(event) => setSelectedModel(event.target.value)}
                 >
-                  <option value={AUTO_MODEL}>Auto (Adaptive Router)</option>
+                  <option value={AUTO_MODEL}>Auto (adaptive router)</option>
                   {models.map((model) => (
                     <option key={model.id} value={model.id}>
                       {model.name} ({model.tier}) — {model.provider}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
               {isAuto && (
-                <label className="block text-sm text-slate-400">
-                  Quality Floor (optional)
-                  <input
+                <label className="block text-sm text-ink-secondary">
+                  Preferred model
+                  <Select
+                    className="mt-2"
+                    value={preferredModel}
+                    onChange={(event) => setPreferredModel(event.target.value)}
+                  >
+                    <option value="">None — let the router choose</option>
+                    {models.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.name}
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+              )}
+              {isAuto && (
+                <label className="block text-sm text-ink-secondary">
+                  Quality floor
+                  <Input
+                    className="mt-2"
                     type="number"
-                    min={0.5}
+                    min={0}
                     max={1}
                     step={0.05}
                     value={qualityFloor}
-                    onChange={(e) => setQualityFloor(e.target.value === '' ? '' : Number(e.target.value))}
-                    placeholder="Use server default"
-                    className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                    onChange={(event) => setQualityFloor(event.target.value)}
+                    placeholder="Server default"
                   />
                 </label>
               )}
+              <label className="block text-sm text-ink-secondary">
+                Max cost (USD)
+                <Input
+                  className="mt-2"
+                  type="number"
+                  min={0}
+                  step="0.000001"
+                  value={maxCost}
+                  onChange={(event) => setMaxCost(event.target.value)}
+                  placeholder="No cap"
+                />
+              </label>
+              <label className="block text-sm text-ink-secondary">
+                Max latency (ms)
+                <Input
+                  className="mt-2"
+                  type="number"
+                  min={0}
+                  step={10}
+                  value={maxLatency}
+                  onChange={(event) => setMaxLatency(event.target.value)}
+                  placeholder="No cap"
+                />
+              </label>
+              <label className="block text-sm text-ink-secondary">
+                Timeout (ms)
+                <Input
+                  className="mt-2"
+                  type="number"
+                  min={1}
+                  max={600000}
+                  step={100}
+                  value={timeoutMs}
+                  onChange={(event) => setTimeoutMs(event.target.value)}
+                  placeholder="No request deadline"
+                />
+              </label>
             </div>
 
-            <label className="mb-2 block text-sm text-slate-400">Your prompt</label>
+            <div className="mb-4 flex flex-wrap gap-4 text-sm text-ink-secondary">
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-line bg-surface-1 text-brand-600"
+                  checked={requiresVision}
+                  onChange={(event) => setRequiresVision(event.target.checked)}
+                />
+                Requires vision
+              </label>
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-line bg-surface-1 text-brand-600"
+                  checked={requiresTools}
+                  onChange={(event) => setRequiresTools(event.target.checked)}
+                />
+                Requires tools
+              </label>
+            </div>
+
+            <p className="mb-2 text-xs text-ink-muted">Example prompts</p>
+            <div className="mb-4 flex flex-wrap gap-2">
+              {EXAMPLE_PROMPTS.map((example) => (
+                <button
+                  key={example.id}
+                  type="button"
+                  title={example.description}
+                  onClick={() => {
+                    setPrompt(example.prompt);
+                    setPreviewRouting(null);
+                  }}
+                  className="rounded-full border border-line bg-surface-1 px-3 py-1 text-xs text-ink-secondary hover:border-brand-500/40 hover:text-ink-primary"
+                >
+                  {example.label}
+                </button>
+              ))}
+            </div>
+
+            <label className="mb-2 block text-sm text-ink-secondary">Prompt</label>
             <textarea
               value={prompt}
-              onChange={(e) => {
-                setPrompt(e.target.value);
+              onChange={(event) => {
+                setPrompt(event.target.value);
                 setPreviewRouting(null);
               }}
-              rows={5}
-              placeholder="Ask a question, paste code to debug, or request analysis..."
-              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder:text-slate-600"
+              onKeyDown={handleKeyDown}
+              rows={6}
+              disabled={loading}
+              placeholder="Ask a question, paste code, or request analysis… Enter to send, Shift+Enter for a new line."
+              className="w-full resize-y rounded-control border border-line bg-surface-1 px-3 py-2 text-sm text-ink-primary placeholder:text-ink-muted focus:outline-none focus:ring-2 focus:ring-brand-500/50 disabled:opacity-50"
             />
 
-            {error && <ErrorBanner message={error} />}
+            {error && (
+              <div className="mt-3">
+                <ErrorBanner
+                  message={errorIsTimeout ? `Timeout: ${error}` : error}
+                  variant={errorIsTimeout ? 'warning' : 'error'}
+                />
+              </div>
+            )}
 
             <div className="mt-4 flex flex-wrap gap-3">
-              <button
-                type="submit"
-                disabled={loading || !prompt.trim()}
-                className="flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
-              >
-                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              <Button type="button" onClick={() => void handleSend()} loading={loading} disabled={!prompt.trim()}>
+                {!loading && <Send className="h-4 w-4" />}
                 Send
-              </button>
+              </Button>
               {isAuto && (
-                <button
+                <Button
                   type="button"
-                  onClick={handlePreviewRoute}
-                  disabled={previewLoading || !prompt.trim()}
-                  className="flex items-center gap-2 rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+                  variant="secondary"
+                  onClick={() => void handlePreviewRoute()}
+                  loading={previewLoading}
+                  disabled={!prompt.trim() || loading}
                 >
-                  {previewLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Route className="h-4 w-4" />}
-                  Preview Routing
-                </button>
+                  {!previewLoading && <Route className="h-4 w-4" />}
+                  Preview routing
+                </Button>
               )}
-              {response && (
-                <button
-                  type="button"
-                  onClick={handleEvaluate}
-                  disabled={evaluating}
-                  className="flex items-center gap-2 rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800 disabled:opacity-50"
-                >
-                  {evaluating ? <Loader2 className="h-4 w-4 animate-spin" /> : <ClipboardCheck className="h-4 w-4" />}
-                  Evaluate Response
-                </button>
+              {lastResponse && (
+                <Button type="button" variant="ghost" onClick={() => void handleEvaluate()} loading={evaluating}>
+                  {!evaluating && <ClipboardCheck className="h-4 w-4" />}
+                  Evaluate response
+                </Button>
               )}
             </div>
-          </form>
+          </Card>
 
-          {response && (
-            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
-              <div className="flex items-center justify-between gap-3">
-                <h3 className="text-sm font-medium text-slate-400">Response</h3>
-                {response.fallback?.used && (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-200">
-                    <ShieldAlert className="h-3 w-3" />
-                    Fallback used
+          <Card padding="none" className="overflow-hidden">
+            <div className="flex items-center justify-between border-b border-line px-5 py-3">
+              <h3 className="text-sm font-medium text-ink-primary">Conversation</h3>
+              {lastResponse && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant={lastResponse.tier}>{lastResponse.tier}</Badge>
+                  <span className="text-xs text-ink-muted">
+                    {lastResponse.model_name} · {formatMs(lastResponse.latency_ms)} · {formatCost(lastResponse.cost.total_cost)}
                   </span>
-                )}
-              </div>
-              <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-slate-200">
-                {response.content}
-              </p>
-              {response.fallback?.used && (
-                <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950/70 p-3 text-xs text-slate-400">
-                  <p>
-                    Escalated from <span className="text-white">{response.fallback.original_model}</span> to{' '}
-                    <span className="text-white">{response.fallback.final_model}</span>
-                    {response.fallback.escalation_reason
-                      ? ` (${response.fallback.escalation_reason.replace(/_/g, ' ')})`
-                      : ''}
-                  </p>
-                  <ul className="mt-2 space-y-1">
-                    {response.fallback.attempts.map((attempt) => (
-                      <li key={`${attempt.model_id}-${attempt.reason}`}>
-                        {attempt.model_id}: {attempt.success ? 'success' : `failed (${attempt.reason})`}
-                      </li>
-                    ))}
-                  </ul>
                 </div>
               )}
             </div>
-          )}
+            <div ref={transcriptRef} className="max-h-[32rem] space-y-4 overflow-y-auto px-5 py-4">
+              {turns.length === 0 && !loading && (
+                <EmptyState
+                  icon={MessageSquare}
+                  title="No messages yet"
+                  description="Choose an example or write a prompt, then send it through the gateway."
+                />
+              )}
+              {turns.map((turn) => (
+                <div key={turn.id} className="space-y-3">
+                  <div className="ml-8 rounded-xl border border-line bg-surface-3/70 px-4 py-3">
+                    <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-ink-muted">You</p>
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink-primary">{turn.prompt}</p>
+                  </div>
+                  {turn.response && (
+                    <div className="mr-8 rounded-xl border border-brand-500/20 bg-surface-1 px-4 py-3">
+                      <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-brand-300">
+                        {turn.response.model_name || turn.response.model}
+                      </p>
+                      <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink-primary">{turn.response.content}</p>
+                    </div>
+                  )}
+                  {turn.error && (
+                    <div className="mr-8">
+                      <ErrorBanner
+                        message={turn.isTimeout ? `Timeout: ${turn.error}` : turn.error}
+                        variant={turn.isTimeout ? 'warning' : 'error'}
+                      />
+                    </div>
+                  )}
+                </div>
+              ))}
+              {loading && (
+                <div className="mr-8 animate-pulse rounded-xl border border-line bg-surface-1 px-4 py-3">
+                  <div className="h-3 w-24 rounded bg-surface-3" />
+                  <div className="mt-3 h-3 w-full rounded bg-surface-3" />
+                  <div className="mt-2 h-3 w-2/3 rounded bg-surface-3" />
+                </div>
+              )}
+            </div>
+          </Card>
 
           {evaluation && (
-            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
-              <h3 className="text-sm font-medium text-white">Judge Evaluation</h3>
+            <Card>
+              <h3 className="text-sm font-medium text-ink-primary">Judge evaluation</h3>
               <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3">
                 {Object.entries(evaluation.scores)
                   .filter(([key]) => !['judge_provider', 'judge_reasoning'].includes(key))
                   .map(([key, value]) => (
-                    <StatCard
-                      key={key}
-                      label={key.replace(/_/g, ' ')}
-                      value={typeof value === 'number' ? `${(value * 100).toFixed(0)}%` : String(value)}
-                    />
+                    <div key={key} className="rounded-lg border border-line bg-surface-1 px-3 py-2">
+                      <p className="text-xs capitalize text-ink-muted">{key.replace(/_/g, ' ')}</p>
+                      <p className="mt-1 text-sm font-medium text-ink-primary">
+                        {typeof value === 'number' ? `${(value * 100).toFixed(0)}%` : String(value)}
+                      </p>
+                    </div>
                   ))}
               </div>
               {evaluation.scores.judge_reasoning && (
-                <p className="mt-3 text-xs text-slate-400">{evaluation.scores.judge_reasoning}</p>
+                <p className="mt-3 text-xs text-ink-secondary">{evaluation.scores.judge_reasoning}</p>
               )}
-            </div>
+            </Card>
           )}
         </div>
 
-        <div className="space-y-4">
-          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
-            <h3 className="text-sm font-medium text-white">Routing</h3>
-            {routing ? (
-              <dl className="mt-4 space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <dt className="text-slate-400">Task</dt>
-                  <dd className="capitalize text-white">{routing.task_type.replace(/_/g, ' ')}</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-slate-400">Difficulty</dt>
-                  <dd className="text-white">{(routing.difficulty * 100).toFixed(0)}%</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-slate-400">Selected</dt>
-                  <dd className="text-white">{routing.selected_model}</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-slate-400">Est. Quality</dt>
-                  <dd className="text-white">{(routing.estimated_quality * 100).toFixed(0)}%</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-slate-400">Cost Saved</dt>
-                  <dd className="text-emerald-300">${routing.cost_saved_vs_strong.toFixed(6)}</dd>
-                </div>
-              </dl>
-            ) : (
-              <p className="mt-3 text-sm text-slate-500">
-                {isAuto ? 'Preview or send a message to see routing decisions.' : 'Select Auto to enable adaptive routing.'}
-              </p>
-            )}
-          </div>
-
-          {routing && routing.tier_qualities.length > 0 && (
-            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
-              <h3 className="text-sm font-medium text-white">Tier Comparison</h3>
-              <div className="mt-3 space-y-2">
-                {routing.tier_qualities.map((tier) => (
-                  <div key={tier.tier} className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs">
-                    <div className="flex justify-between capitalize text-slate-300">
-                      <span>{tier.tier}</span>
-                      <span className={tier.meets_quality_floor ? 'text-emerald-300' : 'text-amber-300'}>
-                        {tier.meets_quality_floor ? 'meets floor' : 'below floor'}
-                      </span>
-                    </div>
-                    <div className="mt-1 flex justify-between text-slate-500">
-                      <span>Quality {(tier.expected_quality * 100).toFixed(0)}%</span>
-                      <span>${tier.estimated_cost.toFixed(6)}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {routing && Object.keys(routing.features).length > 0 && (
-            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
-              <h3 className="text-sm font-medium text-white">Prompt Features</h3>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {Object.entries(routing.features).map(([key, value]) => (
-                  <span
-                    key={key}
-                    className="rounded-full border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-400"
-                  >
-                    {key}: {String(value)}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {routing && (
-            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
-              <h3 className="text-sm font-medium text-white">Explanation</h3>
-              <ul className="mt-3 space-y-2 text-sm text-slate-300">
-                {routing.explanation.map((line: string) => (
-                  <li key={line} className="flex gap-2">
-                    <span className="text-brand-400">•</span>
-                    <span>{line}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {response && (
-            <StatCard
-              label="Actual Cost"
-              value={`$${response.cost.total_cost.toFixed(6)}`}
-              subtext={`${response.model} · ${response.latency_ms.toFixed(0)} ms · ${response.usage.total_tokens} tokens`}
-            />
-          )}
-        </div>
+        <RoutingPanel
+          routing={routing}
+          response={lastResponse}
+          selectedModelMeta={selectedModelMeta}
+          selectedHealth={
+            (selectedModelMeta && healthByModel[selectedModelMeta.id]) ||
+            (routing ? healthByModel[routing.selected_model] : undefined) ||
+            (lastResponse ? healthByModel[lastResponse.model] : undefined)
+          }
+          requestedCapabilities={lastResponse || previewRouting ? sentCapabilities : currentCapabilities}
+          pinnedModel={!isAuto}
+          previewOnly={previewOnly}
+        />
       </div>
     </div>
   );

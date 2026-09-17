@@ -13,8 +13,11 @@ from app.api.metrics import router as metrics_router
 from app.api.models import router as models_router
 from app.api.routing import router as routing_router
 from app.api.experiments import router as experiments_router
+from app.api.model_health import router as model_health_router
 from app.api.openai_compat import router as openai_compat_router
+from app.api.performance import router as performance_router
 from app.api.training import router as training_router
+from app.api.usage import router as usage_router
 from app.config.settings import get_settings
 from app.db.database import init_db
 from app.schemas.models import HealthResponse
@@ -58,6 +61,9 @@ def create_app() -> FastAPI:
     app.include_router(routing_router)
     app.include_router(openai_compat_router)
     app.include_router(experiments_router)
+    app.include_router(model_health_router)
+    app.include_router(usage_router)
+    app.include_router(performance_router)
 
     @app.get("/health", response_model=HealthResponse, tags=["health"])
     def health_check() -> HealthResponse:

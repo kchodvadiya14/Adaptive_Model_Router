@@ -12,8 +12,10 @@ import type {
   HealthResponse,
   MetricsSummary,
   ModelCreateRequest,
+  ModelHealthStatus,
   ModelMetadata,
   ModelUpdateRequest,
+  PerformanceReport,
   PreferenceRecord,
   RouteConfigOverride,
   RoutingDecision,
@@ -23,6 +25,7 @@ import type {
   ExperimentJobStatus,
   ExperimentManifest,
   ExperimentReport,
+  UsageSummary,
 } from '../types';
 
 const api = axios.create({
@@ -80,10 +83,16 @@ export async function sendChat(request: ChatRequest): Promise<ChatResponse> {
 export async function routePrompt(
   prompt: string,
   configuration?: RouteConfigOverride,
+  options?: {
+    preferred_model?: string;
+    max_cost?: number;
+    max_latency_ms?: number;
+  },
 ): Promise<RoutingDecision> {
   const { data } = await api.post<RoutingDecision>('/api/route', {
     prompt,
     configuration,
+    ...options,
   });
   return data;
 }
@@ -95,6 +104,32 @@ export async function evaluateResponse(prompt: string, response: string): Promis
 
 export async function fetchMetrics(): Promise<MetricsSummary> {
   const { data } = await api.get<MetricsSummary>('/api/metrics');
+  return data;
+}
+
+export async function fetchModelHealth(): Promise<ModelHealthStatus[]> {
+  const { data } = await api.get<ModelHealthStatus[]>('/api/health/models');
+  return data;
+}
+
+export async function fetchModelPerformance(params?: {
+  model_id?: string;
+  task_type?: string;
+  since?: string;
+  until?: string;
+}): Promise<PerformanceReport> {
+  const { data } = await api.get<PerformanceReport>('/api/performance/models', { params });
+  return data;
+}
+
+export async function fetchUsage(params?: {
+  user_id?: string;
+  session_id?: string;
+  model_id?: string;
+  tag_key?: string;
+  tag_value?: string;
+}): Promise<UsageSummary> {
+  const { data } = await api.get<UsageSummary>('/api/usage', { params });
   return data;
 }
 
@@ -192,6 +227,7 @@ export async function startExperiment(payload: {
   dataset_path?: string;
   quality_floor?: number;
   max_prompts?: number;
+  strategies?: BenchmarkStrategy[];
   quality_floors?: number[];
   router_types?: string[];
 }): Promise<ExperimentJobStatus> {

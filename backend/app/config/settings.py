@@ -73,6 +73,25 @@ class Settings(BaseSettings):
         description="Optional bearer token for /v1/* OpenAI-compatible endpoints.",
     )
 
+    health_failure_threshold: int = Field(
+        default=3,
+        ge=1,
+        alias="HEALTH_FAILURE_THRESHOLD",
+        description="Consecutive retryable provider failures before a model's circuit opens.",
+    )
+    request_min_attempt_budget_ms: float = Field(
+        default=10.0,
+        ge=0,
+        alias="REQUEST_MIN_ATTEMPT_BUDGET_MS",
+        description="With timeout_ms set, don't start a generation/evaluation step with less than this much budget left.",
+    )
+    health_cooldown_seconds: float = Field(
+        default=30.0,
+        ge=0,
+        alias="HEALTH_COOLDOWN_SECONDS",
+        description="Seconds an open circuit waits before allowing one half-open trial request.",
+    )
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

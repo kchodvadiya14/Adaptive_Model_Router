@@ -40,7 +40,15 @@ def test_v1_get_model_auto(temp_registry):
     assert response.json()["id"] == "auto"
 
 
-def test_v1_chat_completions_mock_model(temp_registry):
+def test_v1_chat_completions_mock_model(temp_registry, monkeypatch):
+    # Isolate this test from quality-based escalation (Step 2): it asserts the pinned
+    # model is returned unchanged, which the real MockJudge heuristic can't guarantee
+    # for a short canned response.
+    monkeypatch.setenv("EVALUATE_ON_CHAT", "false")
+    from app.config.settings import get_settings
+
+    get_settings.cache_clear()
+
     response = client.post(
         "/v1/chat/completions",
         json={

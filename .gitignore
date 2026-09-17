@@ -47,6 +47,7 @@ data/benchmarks/*
 node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/tsconfig.tsbuildinfo
 
 # IDE
 .idea/

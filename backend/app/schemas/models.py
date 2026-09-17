@@ -39,6 +39,8 @@ class ModelMetadata(BaseModel):
     output_cost_per_1m_tokens: float = Field(ge=0)
     context_window: int = Field(gt=0)
     capabilities: list[str] = Field(default_factory=list)
+    supports_vision: bool = Field(default=False, description="Accepts image/multimodal input")
+    supports_tools: bool = Field(default=False, description="Supports tool/function calling")
     enabled: bool = True
     avg_latency_ms: float = Field(default=500.0, ge=0)
     quality_score: float = Field(default=0.85, ge=0, le=1)
@@ -54,6 +56,8 @@ class ModelCreateRequest(BaseModel):
     output_cost_per_1m_tokens: float = Field(ge=0)
     context_window: int = Field(gt=0)
     capabilities: list[str] = Field(default_factory=list)
+    supports_vision: bool = Field(default=False, description="Accepts image/multimodal input")
+    supports_tools: bool = Field(default=False, description="Supports tool/function calling")
     enabled: bool = True
     avg_latency_ms: float = Field(default=500.0, ge=0)
     quality_score: float = Field(default=0.85, ge=0, le=1)
@@ -68,6 +72,8 @@ class ModelUpdateRequest(BaseModel):
     output_cost_per_1m_tokens: float | None = Field(default=None, ge=0)
     context_window: int | None = Field(default=None, gt=0)
     capabilities: list[str] | None = None
+    supports_vision: bool | None = None
+    supports_tools: bool | None = None
     enabled: bool | None = None
     avg_latency_ms: float | None = Field(default=None, ge=0)
     quality_score: float | None = Field(default=None, ge=0, le=1)
@@ -91,3 +97,17 @@ class RouterStatusResponse(BaseModel):
     fallback_escalation: str
     enabled_models: int
     total_models: int
+
+
+class ModelHealthStatus(BaseModel):
+    model_id: str
+    provider: str
+    state: Literal["closed", "open", "half_open"]
+    consecutive_failures: int
+    recent_failures: int
+    recent_successes: int
+    opened_at: str | None = None
+    last_success: str | None = None
+    last_failure: str | None = None
+    last_error: str | None = None
+    cooldown_remaining_seconds: float | None = None

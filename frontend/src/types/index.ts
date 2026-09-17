@@ -11,6 +11,8 @@ export interface ModelMetadata {
   output_cost_per_1m_tokens: number;
   context_window: number;
   capabilities: string[];
+  supports_vision: boolean;
+  supports_tools: boolean;
   enabled: boolean;
   avg_latency_ms: number;
   quality_score: number;
@@ -26,6 +28,7 @@ export interface HealthResponse {
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
+  has_image?: boolean;
 }
 
 export interface ChatRequest {
@@ -34,6 +37,15 @@ export interface ChatRequest {
   max_tokens?: number;
   temperature?: number;
   quality_floor?: number;
+  tools?: Array<Record<string, unknown>>;
+  request_id?: string;
+  user_id?: string;
+  session_id?: string;
+  tags?: Record<string, string>;
+  preferred_model?: string;
+  max_cost?: number;
+  max_latency_ms?: number;
+  timeout_ms?: number;
 }
 
 export interface RouteConfigOverride {
@@ -67,6 +79,8 @@ export interface ModelCreateRequest {
   output_cost_per_1m_tokens: number;
   context_window: number;
   capabilities?: string[];
+  supports_vision?: boolean;
+  supports_tools?: boolean;
   enabled?: boolean;
   avg_latency_ms?: number;
   quality_score?: number;
@@ -81,6 +95,8 @@ export interface ModelUpdateRequest {
   output_cost_per_1m_tokens?: number;
   context_window?: number;
   capabilities?: string[];
+  supports_vision?: boolean;
+  supports_tools?: boolean;
   enabled?: boolean;
   avg_latency_ms?: number;
   quality_score?: number;
@@ -118,6 +134,8 @@ export interface RoutingDecision {
     meets_quality_floor: boolean;
   }>;
   features: Record<string, unknown>;
+  preferred_model?: string | null;
+  preferred_model_honored?: boolean | null;
 }
 
 export interface FallbackAttemptRecord {
@@ -148,6 +166,7 @@ export interface ChatResponse {
   routed: boolean;
   routing: RoutingDecision | null;
   fallback: FallbackInfo | null;
+  request_id?: string | null;
 }
 
 export interface MetricsSummary {
@@ -266,6 +285,7 @@ export interface TrainedModelInfo {
     recall: number;
     f1: number;
     routing_threshold: number;
+    probability_mean?: number | null;
     confusion_matrix: {
       true_negative: number;
       false_positive: number;
@@ -336,4 +356,85 @@ export interface ExperimentManifest {
   experiment_type: string;
   created_at: string;
   dataset_path: string;
+}
+
+export type CircuitState = 'closed' | 'open' | 'half_open';
+
+export interface ModelHealthStatus {
+  model_id: string;
+  provider: string;
+  state: CircuitState;
+  consecutive_failures: number;
+  recent_failures: number;
+  recent_successes: number;
+  opened_at?: string | null;
+  last_success?: string | null;
+  last_failure?: string | null;
+  last_error?: string | null;
+  cooldown_remaining_seconds?: number | null;
+}
+
+export interface OutcomeCounts {
+  success: number;
+  quality_failure: number;
+  retryable_failure: number;
+  non_retryable_failure: number;
+  timeout: number;
+}
+
+export interface ModelPerformance {
+  model_id: string;
+  provider: string;
+  request_count: number;
+  success_count: number;
+  success_rate: number;
+  quality_failure_rate: number;
+  fallback_rate: number;
+  average_latency_ms: number | null;
+  average_estimated_cost: number | null;
+  average_quality_score: number | null;
+  outcomes: OutcomeCounts;
+  first_seen: string;
+  last_seen: string;
+}
+
+export interface PerformanceFilters {
+  model_id?: string | null;
+  task_type?: string | null;
+  since?: string | null;
+  until?: string | null;
+}
+
+export interface PerformanceReport {
+  filters: PerformanceFilters;
+  models: ModelPerformance[];
+}
+
+export interface UsageFilters {
+  user_id?: string | null;
+  session_id?: string | null;
+  model_id?: string | null;
+  tag_key?: string | null;
+  tag_value?: string | null;
+}
+
+export interface UsageBreakdownEntry {
+  key: string;
+  total_requests: number;
+  successful_requests: number;
+  fallback_requests: number;
+  total_estimated_cost: number;
+  average_latency_ms: number;
+}
+
+export interface UsageSummary {
+  filters: UsageFilters;
+  total_requests: number;
+  successful_requests: number;
+  fallback_requests: number;
+  total_estimated_cost: number;
+  average_latency_ms: number;
+  by_user: UsageBreakdownEntry[];
+  by_model: UsageBreakdownEntry[];
+  by_tag: UsageBreakdownEntry[];
 }

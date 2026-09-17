@@ -1,24 +1,40 @@
-import { FormEvent, useCallback, useEffect, useState } from 'react';
-import { Eye, Plus, RefreshCw, ToggleLeft, ToggleRight, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Activity, Bot, History, Plus, RefreshCw, Search, ToggleLeft, ToggleRight } from 'lucide-react';
+import { Badge } from '../components/Badge';
+import { Button } from '../components/Button';
+import { Card } from '../components/Card';
+import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { Input } from '../components/Input';
 import { PageHeader } from '../components/PageHeader';
 import { StatCard } from '../components/StatCard';
+import { Table, TableContainer, TBody, Td, Th, THead, Tr } from '../components/Table';
 import {
   createModel,
   disableModel,
   enableModel,
-  fetchModel,
+  fetchModelHealth,
+  fetchModelPerformance,
   fetchModels,
   fetchRouterStatus,
   updateModel,
 } from '../services/api';
-import type { ModelCreateRequest, ModelMetadata, ModelTier, ModelType, RouterStatusResponse } from '../types';
-
-const tierColors: Record<string, string> = {
-  small: 'bg-emerald-500/20 text-emerald-300',
-  medium: 'bg-amber-500/20 text-amber-300',
-  strong: 'bg-rose-500/20 text-rose-300',
-};
+import type {
+  ModelCreateRequest,
+  ModelHealthStatus,
+  ModelMetadata,
+  ModelPerformance,
+  RouterStatusResponse,
+} from '../types';
+import { ModelDetailModal } from './models/ModelDetailModal';
+import { ModelFormModal } from './models/ModelFormModal';
+import {
+  formatCountdown,
+  formatMs,
+  formatPercent,
+  HEALTH_BADGE_VARIANT,
+  HEALTH_LABEL,
+} from './models/format';
 
 const emptyForm: ModelCreateRequest = {
   id: '',
@@ -30,329 +46,424 @@ const emptyForm: ModelCreateRequest = {
   output_cost_per_1m_tokens: 0,
   context_window: 32000,
   capabilities: ['general'],
+  supports_vision: false,
+  supports_tools: false,
   enabled: true,
   avg_latency_ms: 100,
   quality_score: 0.85,
 };
 
+function toFormValue(model: ModelMetadata): ModelCreateRequest {
+  return {
+    id: model.id,
+    name: model.name,
+    provider: model.provider,
+    type: model.type,
+    tier: model.tier,
+    input_cost_per_1m_tokens: model.input_cost_per_1m_tokens,
+    output_cost_per_1m_tokens: model.output_cost_per_1m_tokens,
+    context_window: model.context_window,
+    capabilities: model.capabilities,
+    supports_vision: model.supports_vision,
+    supports_tools: model.supports_tools,
+    enabled: model.enabled,
+    avg_latency_ms: model.avg_latency_ms,
+    quality_score: model.quality_score,
+  };
+}
+
+function SkeletonBar({ className = '' }: { className?: string }) {
+  return <div className={`animate-pulse rounded bg-surface-3 ${className}`} />;
+}
+
+function SkeletonRow() {
+  return (
+    <Tr className="hover:bg-transparent">
+      {Array.from({ length: 9 }).map((_, index) => (
+        <Td key={index}>
+          <SkeletonBar className="h-4 w-16" />
+        </Td>
+      ))}
+    </Tr>
+  );
+}
+
 export function ModelsPage() {
   const [models, setModels] = useState<ModelMetadata[]>([]);
   const [routerStatus, setRouterStatus] = useState<RouterStatusResponse | null>(null);
+  const [healthList, setHealthList] = useState<ModelHealthStatus[]>([]);
+  const [performanceList, setPerformanceList] = useState<ModelPerformance[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [healthUnavailable, setHealthUnavailable] = useState(false);
+  const [performanceUnavailable, setPerformanceUnavailable] = useState(false);
+
+  const [search, setSearch] = useState('');
+
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState<ModelCreateRequest>(emptyForm);
-  const [detailModel, setDetailModel] = useState<ModelMetadata | null>(null);
+  const [formInitialValue, setFormInitialValue] = useState<ModelCreateRequest>(emptyForm);
+  const [formSubmitting, setFormSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const [detailModelId, setDetailModelId] = useState<string | null>(null);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
-    try {
-      const [modelsData, statusData] = await Promise.all([fetchModels(), fetchRouterStatus()]);
-      setModels(modelsData);
-      setRouterStatus(statusData);
-    } catch {
-      setError('Failed to load model registry. Ensure the backend is running on port 8000.');
-    } finally {
-      setLoading(false);
+    const [modelsResult, statusResult, healthResult, performanceResult] = await Promise.allSettled([
+      fetchModels(),
+      fetchRouterStatus(),
+      fetchModelHealth(),
+      fetchModelPerformance(),
+    ]);
+
+    if (modelsResult.status === 'fulfilled') {
+      setModels(modelsResult.value);
+    } else {
+      setError('Failed to load the model registry. Ensure the backend is running on port 8000.');
+      setModels([]);
     }
+
+    setRouterStatus(statusResult.status === 'fulfilled' ? statusResult.value : null);
+
+    setHealthUnavailable(healthResult.status !== 'fulfilled');
+    setHealthList(healthResult.status === 'fulfilled' ? healthResult.value : []);
+
+    setPerformanceUnavailable(performanceResult.status !== 'fulfilled');
+    setPerformanceList(performanceResult.status === 'fulfilled' ? performanceResult.value.models : []);
+
+    setLoading(false);
   }, []);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
+  const healthByModelId = useMemo(() => {
+    const map = new Map<string, ModelHealthStatus>();
+    healthList.forEach((entry) => map.set(entry.model_id, entry));
+    return map;
+  }, [healthList]);
+
+  const performanceByModelId = useMemo(() => {
+    const map = new Map<string, ModelPerformance>();
+    performanceList.forEach((entry) => map.set(entry.model_id, entry));
+    return map;
+  }, [performanceList]);
+
+  const filteredModels = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return models;
+    return models.filter(
+      (model) =>
+        model.name.toLowerCase().includes(query) ||
+        model.id.toLowerCase().includes(query) ||
+        model.provider.toLowerCase().includes(query),
+    );
+  }, [models, search]);
+
+  const openCircuits = healthUnavailable ? null : healthList.filter((entry) => entry.state === 'open').length;
+
   const toggleModel = async (model: ModelMetadata) => {
+    setTogglingId(model.id);
+    setError(null);
     try {
       const updated = model.enabled ? await disableModel(model.id) : await enableModel(model.id);
-      setModels((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
-      const status = await fetchRouterStatus();
-      setRouterStatus(status);
+      setModels((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      fetchRouterStatus()
+        .then(setRouterStatus)
+        .catch(() => undefined);
     } catch {
-      setError(`Failed to ${model.enabled ? 'disable' : 'enable'} model.`);
+      setError(`Failed to ${model.enabled ? 'disable' : 'enable'} "${model.name}".`);
+    } finally {
+      setTogglingId(null);
     }
   };
 
   const openCreate = () => {
     setEditingId(null);
-    setForm(emptyForm);
+    setFormInitialValue(emptyForm);
+    setFormError(null);
     setShowForm(true);
   };
 
   const openEdit = (model: ModelMetadata) => {
     setEditingId(model.id);
-    setForm({
-      id: model.id,
-      name: model.name,
-      provider: model.provider,
-      type: model.type,
-      tier: model.tier,
-      input_cost_per_1m_tokens: model.input_cost_per_1m_tokens,
-      output_cost_per_1m_tokens: model.output_cost_per_1m_tokens,
-      context_window: model.context_window,
-      capabilities: model.capabilities,
-      enabled: model.enabled,
-      avg_latency_ms: model.avg_latency_ms,
-      quality_score: model.quality_score,
-    });
+    setFormInitialValue(toFormValue(model));
+    setFormError(null);
     setShowForm(true);
   };
 
-  const handleSubmit = async (event: FormEvent) => {
-    event.preventDefault();
+  const handleFormSubmit = async (form: ModelCreateRequest) => {
+    setFormSubmitting(true);
+    setFormError(null);
     try {
       if (editingId) {
         const { id: _unusedId, ...updates } = form;
         void _unusedId;
         const updated = await updateModel(editingId, updates);
-        setModels((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+        setModels((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
       } else {
         const created = await createModel(form);
         setModels((prev) => [...prev, created]);
       }
       setShowForm(false);
     } catch {
-      setError(editingId ? 'Failed to update model.' : 'Failed to create model. ID may already exist.');
+      setFormError(
+        editingId ? 'Failed to update this model.' : 'Failed to create model — the ID may already be in use.',
+      );
+    } finally {
+      setFormSubmitting(false);
     }
   };
 
-  const viewDetail = async (modelId: string) => {
-    try {
-      setDetailModel(await fetchModel(modelId));
-    } catch {
-      setError('Failed to load model details.');
-    }
-  };
+  const detailModel = detailModelId ? models.find((model) => model.id === detailModelId) ?? null : null;
 
   return (
     <div>
       <PageHeader
         title="Model Registry"
-        description="Configure available LLM providers, tiers, pricing, and capabilities."
+        description="Configure providers, tiers and capabilities, and monitor live circuit health and historical performance."
         action={
           <div className="flex gap-2">
-            <button
-              onClick={openCreate}
-              className="flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700"
-            >
+            <Button onClick={openCreate}>
               <Plus className="h-4 w-4" />
               Add Model
-            </button>
-            <button
-              onClick={loadData}
-              className="flex items-center gap-2 rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800"
-            >
-              <RefreshCw className="h-4 w-4" />
+            </Button>
+            <Button variant="secondary" onClick={loadData} disabled={loading}>
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
               Refresh
-            </button>
+            </Button>
           </div>
         }
       />
 
-      {routerStatus && (
-        <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-4">
-          <StatCard label="Total Models" value={routerStatus.total_models} />
-          <StatCard label="Enabled Models" value={routerStatus.enabled_models} />
-          <StatCard label="Router Type" value={routerStatus.router_type} />
-          <StatCard label="Quality Floor" value={`${(routerStatus.quality_floor * 100).toFixed(0)}%`} />
-        </div>
-      )}
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {loading ? (
+          Array.from({ length: 4 }).map((_, index) => (
+            <Card key={index}>
+              <SkeletonBar className="h-4 w-24" />
+              <SkeletonBar className="mt-3 h-7 w-14" />
+            </Card>
+          ))
+        ) : (
+          <>
+            <StatCard label="Total Models" value={models.length} />
+            <StatCard label="Enabled Models" value={models.filter((model) => model.enabled).length} />
+            <StatCard
+              label="Circuits Open"
+              value={openCircuits ?? '—'}
+              subtext={healthUnavailable ? 'Live health unavailable' : 'Temporarily unavailable models'}
+            />
+            <StatCard
+              label="Quality Floor"
+              value={routerStatus ? `${(routerStatus.quality_floor * 100).toFixed(0)}%` : '—'}
+              subtext={routerStatus ? `Router: ${routerStatus.router_type}` : undefined}
+            />
+          </>
+        )}
+      </div>
 
       {error && <ErrorBanner message={error} />}
+      {!error && healthUnavailable && !loading && (
+        <ErrorBanner variant="warning" message="Live health data unavailable — showing registry data only." />
+      )}
+      {!error && performanceUnavailable && !loading && (
+        <ErrorBanner variant="warning" message="Historical performance data unavailable." />
+      )}
 
-      {loading ? (
-        <p className="text-slate-400">Loading models...</p>
+      {!loading && !error && models.length === 0 ? (
+        <EmptyState
+          icon={Bot}
+          title="No models registered"
+          description="Add your first model to make it available for routing."
+        />
       ) : (
-        <div className="overflow-hidden rounded-xl border border-slate-800">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-slate-900/80 text-slate-400">
-              <tr>
-                <th className="px-4 py-3 font-medium">Model</th>
-                <th className="px-4 py-3 font-medium">Provider</th>
-                <th className="px-4 py-3 font-medium">Tier</th>
-                <th className="px-4 py-3 font-medium">Latency</th>
-                <th className="px-4 py-3 font-medium">Quality</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {models.map((model) => (
-                <tr key={model.id} className="border-t border-slate-800 hover:bg-slate-900/40">
-                  <td className="px-4 py-3">
-                    <div className="font-medium text-white">{model.name}</div>
-                    <div className="text-xs text-slate-500">{model.id}</div>
-                  </td>
-                  <td className="px-4 py-3 capitalize text-slate-300">{model.provider}</td>
-                  <td className="px-4 py-3">
-                    <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${tierColors[model.tier]}`}>
-                      {model.tier}
+        <>
+          {!loading && models.length > 0 && (
+            <div className="mb-4 max-w-xs">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-muted" />
+                <Input
+                  placeholder="Search by name, ID or provider…"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  className="pl-9"
+                />
+              </div>
+            </div>
+          )}
+
+          <TableContainer>
+            <Table className="min-w-[1280px]">
+              <THead>
+                <tr>
+                  <th colSpan={6} className="border-b border-line px-4 pt-3 text-left text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+                    Registry
+                  </th>
+                  <th colSpan={3} className="border-b border-line border-l border-line-strong bg-surface-3/30 px-4 pt-3 text-left text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+                    <span className="inline-flex items-center gap-1.5">
+                      <Activity className="h-3 w-3" /> Live Health
                     </span>
-                  </td>
-                  <td className="px-4 py-3 text-slate-300">{model.avg_latency_ms.toFixed(0)} ms</td>
-                  <td className="px-4 py-3 text-slate-300">{(model.quality_score * 100).toFixed(0)}%</td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`rounded-full px-2.5 py-1 text-xs ${
-                        model.enabled ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-700 text-slate-400'
-                      }`}
-                    >
-                      {model.enabled ? 'Enabled' : 'Disabled'}
+                  </th>
+                  <th colSpan={5} className="border-b border-line border-l border-line-strong bg-surface-3/30 px-4 pt-3 text-left text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+                    <span className="inline-flex items-center gap-1.5">
+                      <History className="h-3 w-3" /> Historical Performance
                     </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => viewDetail(model.id)} className="text-slate-400 hover:text-white" title="View">
-                        <Eye className="h-4 w-4" />
-                      </button>
-                      <button onClick={() => openEdit(model)} className="text-xs text-brand-300 hover:text-brand-200">
-                        Edit
-                      </button>
-                      <button onClick={() => toggleModel(model)} className="text-slate-400 hover:text-white">
-                        {model.enabled ? (
-                          <ToggleRight className="h-5 w-5 text-emerald-400" />
-                        ) : (
-                          <ToggleLeft className="h-5 w-5" />
-                        )}
-                      </button>
-                    </div>
-                  </td>
+                  </th>
+                  <th className="border-b border-line" />
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                <Tr className="hover:bg-transparent">
+                  <Th>Model</Th>
+                  <Th>Provider</Th>
+                  <Th>Tier</Th>
+                  <Th>Context</Th>
+                  <Th>Capabilities</Th>
+                  <Th>Status</Th>
+                  <Th className="border-l border-line-strong bg-surface-3/30">State</Th>
+                  <Th className="bg-surface-3/30">Failures</Th>
+                  <Th className="bg-surface-3/30">Cooldown</Th>
+                  <Th className="border-l border-line-strong bg-surface-3/30">Requests</Th>
+                  <Th className="bg-surface-3/30">Success</Th>
+                  <Th className="bg-surface-3/30">Avg. latency</Th>
+                  <Th className="bg-surface-3/30">Avg. quality</Th>
+                  <Th className="bg-surface-3/30">Fallback</Th>
+                  <Th>Actions</Th>
+                </Tr>
+              </THead>
+              <TBody>
+                {loading ? (
+                  Array.from({ length: 5 }).map((_, index) => <SkeletonRow key={index} />)
+                ) : filteredModels.length === 0 ? (
+                  <tr>
+                    <td colSpan={15} className="px-4 py-10 text-center text-sm text-ink-muted">
+                      No models match “{search}”.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredModels.map((model) => {
+                    const health = healthByModelId.get(model.id);
+                    const performance = performanceByModelId.get(model.id);
+                    return (
+                      <Tr key={model.id}>
+                        <Td>
+                          <button
+                            onClick={() => setDetailModelId(model.id)}
+                            className="text-left font-medium text-ink-primary hover:text-brand-400 hover:underline"
+                          >
+                            {model.name}
+                          </button>
+                          <div className="font-mono text-xs text-ink-muted">{model.id}</div>
+                        </Td>
+                        <Td className="capitalize text-ink-secondary">{model.provider}</Td>
+                        <Td>
+                          <Badge variant={model.tier}>{model.tier}</Badge>
+                        </Td>
+                        <Td className="whitespace-nowrap text-ink-secondary">
+                          {model.context_window.toLocaleString()} tok
+                        </Td>
+                        <Td>
+                          <div className="flex gap-1">
+                            <Badge variant={model.supports_vision ? 'info' : 'neutral'}>Vision</Badge>
+                            <Badge variant={model.supports_tools ? 'info' : 'neutral'}>Tools</Badge>
+                          </div>
+                        </Td>
+                        <Td>
+                          <Badge variant={model.enabled ? 'success' : 'neutral'}>
+                            {model.enabled ? 'Enabled' : 'Disabled'}
+                          </Badge>
+                        </Td>
+                        <Td className="whitespace-nowrap border-l border-line-strong">
+                          {healthUnavailable ? (
+                            <span className="text-ink-muted">—</span>
+                          ) : health ? (
+                            <Badge variant={HEALTH_BADGE_VARIANT[health.state]}>{HEALTH_LABEL[health.state]}</Badge>
+                          ) : (
+                            <Badge variant="neutral">Unknown</Badge>
+                          )}
+                        </Td>
+                        <Td className="text-ink-secondary">{healthUnavailable ? '—' : (health?.consecutive_failures ?? 0)}</Td>
+                        <Td className="whitespace-nowrap text-ink-secondary">
+                          {healthUnavailable || health?.state !== 'open'
+                            ? '—'
+                            : formatCountdown(health.cooldown_remaining_seconds)}
+                        </Td>
+                        <Td className="border-l border-line-strong text-ink-secondary">
+                          {performanceUnavailable ? '—' : (performance?.request_count.toLocaleString() ?? 0)}
+                        </Td>
+                        <Td className="text-ink-secondary">
+                          {performanceUnavailable ? '—' : performance ? formatPercent(performance.success_rate) : '—'}
+                        </Td>
+                        <Td className="whitespace-nowrap text-ink-secondary">
+                          {performanceUnavailable ? '—' : performance ? formatMs(performance.average_latency_ms) : '—'}
+                        </Td>
+                        <Td className="text-ink-secondary">
+                          {performanceUnavailable
+                            ? '—'
+                            : performance
+                              ? formatPercent(performance.average_quality_score)
+                              : '—'}
+                        </Td>
+                        <Td className="text-ink-secondary">
+                          {performanceUnavailable ? '—' : performance ? formatPercent(performance.fallback_rate) : '—'}
+                        </Td>
+                        <Td>
+                          <div className="flex items-center gap-3 whitespace-nowrap">
+                            <button
+                              onClick={() => openEdit(model)}
+                              className="text-xs font-medium text-brand-400 hover:text-brand-300"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => toggleModel(model)}
+                              disabled={togglingId === model.id}
+                              aria-label={model.enabled ? 'Disable model' : 'Enable model'}
+                              className="text-ink-muted transition-colors hover:text-ink-primary disabled:opacity-50"
+                            >
+                              {model.enabled ? (
+                                <ToggleRight className="h-5 w-5 text-success-400" />
+                              ) : (
+                                <ToggleLeft className="h-5 w-5" />
+                              )}
+                            </button>
+                          </div>
+                        </Td>
+                      </Tr>
+                    );
+                  })
+                )}
+              </TBody>
+            </Table>
+          </TableContainer>
+        </>
       )}
 
       {showForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <form
-            onSubmit={handleSubmit}
-            className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 p-6"
-          >
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-lg font-medium text-white">{editingId ? 'Edit Model' : 'Add Model'}</h3>
-              <button type="button" onClick={() => setShowForm(false)} className="text-slate-400 hover:text-white">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            <div className="space-y-3">
-              <input
-                required
-                disabled={!!editingId}
-                placeholder="Model ID"
-                value={form.id}
-                onChange={(e) => setForm({ ...form, id: e.target.value })}
-                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white disabled:opacity-50"
-              />
-              <input
-                required
-                placeholder="Display name"
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
-              />
-              <div className="grid grid-cols-2 gap-3">
-                <input
-                  placeholder="Provider"
-                  value={form.provider}
-                  onChange={(e) => setForm({ ...form, provider: e.target.value })}
-                  className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
-                />
-                <select
-                  value={form.tier}
-                  onChange={(e) => setForm({ ...form, tier: e.target.value as ModelTier })}
-                  className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
-                >
-                  <option value="small">Small</option>
-                  <option value="medium">Medium</option>
-                  <option value="strong">Strong</option>
-                </select>
-              </div>
-              <select
-                value={form.type}
-                onChange={(e) => setForm({ ...form, type: e.target.value as ModelType })}
-                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
-              >
-                <option value="api">API</option>
-                <option value="local">Local</option>
-                <option value="open_source">Open Source</option>
-              </select>
-              <div className="grid grid-cols-2 gap-3">
-                <input
-                  type="number"
-                  step="0.01"
-                  placeholder="Input cost / 1M"
-                  value={form.input_cost_per_1m_tokens}
-                  onChange={(e) => setForm({ ...form, input_cost_per_1m_tokens: Number(e.target.value) })}
-                  className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
-                />
-                <input
-                  type="number"
-                  step="0.01"
-                  placeholder="Output cost / 1M"
-                  value={form.output_cost_per_1m_tokens}
-                  onChange={(e) => setForm({ ...form, output_cost_per_1m_tokens: Number(e.target.value) })}
-                  className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <input
-                  type="number"
-                  placeholder="Context window"
-                  value={form.context_window}
-                  onChange={(e) => setForm({ ...form, context_window: Number(e.target.value) })}
-                  className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
-                />
-                <input
-                  type="number"
-                  step="0.01"
-                  placeholder="Quality score (0-1)"
-                  value={form.quality_score}
-                  onChange={(e) => setForm({ ...form, quality_score: Number(e.target.value) })}
-                  className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
-                />
-              </div>
-            </div>
-            <button
-              type="submit"
-              className="mt-4 w-full rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700"
-            >
-              {editingId ? 'Save Changes' : 'Create Model'}
-            </button>
-          </form>
-        </div>
+        <ModelFormModal
+          key={editingId ?? 'create'}
+          open={showForm}
+          editingId={editingId}
+          initialValue={formInitialValue}
+          submitting={formSubmitting}
+          errorMessage={formError}
+          onClose={() => setShowForm(false)}
+          onSubmit={handleFormSubmit}
+        />
       )}
 
-      {detailModel && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-md rounded-xl border border-slate-700 bg-slate-900 p-6">
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-lg font-medium text-white">{detailModel.name}</h3>
-              <button onClick={() => setDetailModel(null)} className="text-slate-400 hover:text-white">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            <dl className="space-y-2 text-sm">
-              <div className="flex justify-between"><dt className="text-slate-400">ID</dt><dd className="text-white">{detailModel.id}</dd></div>
-              <div className="flex justify-between"><dt className="text-slate-400">Provider</dt><dd className="capitalize text-white">{detailModel.provider}</dd></div>
-              <div className="flex justify-between"><dt className="text-slate-400">Tier</dt><dd className="capitalize text-white">{detailModel.tier}</dd></div>
-              <div className="flex justify-between"><dt className="text-slate-400">Context</dt><dd className="text-white">{detailModel.context_window.toLocaleString()}</dd></div>
-              <div className="flex justify-between"><dt className="text-slate-400">Latency</dt><dd className="text-white">{detailModel.avg_latency_ms} ms</dd></div>
-              <div className="flex justify-between"><dt className="text-slate-400">Quality</dt><dd className="text-white">{(detailModel.quality_score * 100).toFixed(0)}%</dd></div>
-            </dl>
-            <div className="mt-4">
-              <p className="text-xs text-slate-400">Capabilities</p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {detailModel.capabilities.map((cap) => (
-                  <span key={cap} className="rounded-full bg-slate-800 px-2 py-1 text-xs text-slate-300">{cap}</span>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <ModelDetailModal
+        model={detailModel}
+        allModels={models}
+        health={detailModel ? healthByModelId.get(detailModel.id) : undefined}
+        performance={detailModel ? performanceByModelId.get(detailModel.id) : undefined}
+        healthUnavailable={healthUnavailable}
+        performanceUnavailable={performanceUnavailable}
+        onClose={() => setDetailModelId(null)}
+      />
     </div>
   );
 }

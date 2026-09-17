@@ -9,6 +9,7 @@ from app.api.errors import ERROR_STATUS_MAP
 from app.config.settings import Settings, get_settings
 from app.models.registry import get_model_registry
 from app.providers.base import ProviderError
+from app.router.capabilities import NoCapableModelError
 from app.schemas.openai import (
     OpenAIChatCompletionRequest,
     OpenAIErrorDetail,
@@ -16,6 +17,7 @@ from app.schemas.openai import (
     OpenAIModel,
 )
 from app.services.chat import get_chat_service
+from app.services.deadline import RequestTimeoutError
 from app.utils.openai_compat import (
     AUTO_MODEL,
     to_chat_request,
@@ -53,11 +55,16 @@ def _openai_error_response(
     error_type: str = "invalid_request_error",
     code: str | None = None,
     http_status: int = status.HTTP_400_BAD_REQUEST,
+    details: dict | None = None,
 ) -> JSONResponse:
     payload = OpenAIErrorResponse(
         error=OpenAIErrorDetail(message=message, type=error_type, code=code)
     )
-    return JSONResponse(status_code=http_status, content=payload.model_dump())
+    content = payload.model_dump()
+    if details is not None:
+        # Only added when present, so every existing error keeps its exact shape.
+        content["error"]["details"] = details
+    return JSONResponse(status_code=http_status, content=content)
 
 
 def _provider_error_response(exc: ProviderError) -> JSONResponse:
@@ -89,6 +96,8 @@ def get_model(model_id: str, _auth: None = Depends(verify_router_api_key)) -> Op
 async def create_chat_completion(
     request: OpenAIChatCompletionRequest,
     x_quality_floor: float | None = Header(default=None, alias="X-Quality-Floor"),
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_timeout_ms: int | None = Header(default=None, alias="X-Request-Timeout-Ms"),
     _auth: None = Depends(verify_router_api_key),
 ) -> JSONResponse:
     """OpenAI-compatible chat completions with adaptive routing via model='auto'."""
@@ -99,14 +108,39 @@ async def create_chat_completion(
         )
 
     try:
-        chat_request = to_chat_request(request, quality_floor=x_quality_floor)
+        chat_request = to_chat_request(
+            request,
+            quality_floor=x_quality_floor,
+            request_id=x_request_id,
+            timeout_ms=x_request_timeout_ms,
+        )
     except ValueError as exc:
         return _openai_error_response(str(exc))
 
     service = get_chat_service()
     try:
         chat_response = await service.chat(chat_request)
+    except RequestTimeoutError as exc:
+        response = _openai_error_response(
+            str(exc),
+            error_type="server_error",
+            code="request_timeout",
+            http_status=status.HTTP_504_GATEWAY_TIMEOUT,
+            details=exc.to_dict(),
+        )
+        if exc.request_id:
+            response.headers["X-Request-ID"] = exc.request_id
+        return response
+    except NoCapableModelError as exc:
+        return _openai_error_response(
+            str(exc),
+            code="capability_not_supported",
+            http_status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
     except ProviderError as exc:
         return _provider_error_response(exc)
 
-    return JSONResponse(content=to_openai_response(chat_response).model_dump())
+    response = JSONResponse(content=to_openai_response(chat_response).model_dump())
+    if chat_response.request_id:
+        response.headers["X-Request-ID"] = chat_response.request_id
+    return response

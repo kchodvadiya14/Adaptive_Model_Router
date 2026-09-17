@@ -21,7 +21,15 @@ def temp_registry(tmp_path, monkeypatch):
     return registry
 
 
-def test_chat_with_mock_model(temp_registry):
+def test_chat_with_mock_model(temp_registry, monkeypatch):
+    # Isolate this test from quality-based escalation (Step 2): it asserts the pinned
+    # model is returned unchanged, which the real MockJudge heuristic can't guarantee
+    # for a short canned response.
+    monkeypatch.setenv("EVALUATE_ON_CHAT", "false")
+    from app.config.settings import get_settings
+
+    get_settings.cache_clear()
+
     response = client.post(
         "/api/chat",
         json={
@@ -75,7 +83,13 @@ def test_chat_openai_without_api_key(temp_registry):
     assert "not configured" in response.json()["detail"]
 
 
-def test_chat_all_mock_tiers(temp_registry):
+def test_chat_all_mock_tiers(temp_registry, monkeypatch):
+    # Isolate this test from quality-based escalation (Step 2); see test_chat_with_mock_model.
+    monkeypatch.setenv("EVALUATE_ON_CHAT", "false")
+    from app.config.settings import get_settings
+
+    get_settings.cache_clear()
+
     tier_models = {
         ModelTier.SMALL: "mock-echo",
         ModelTier.MEDIUM: "mock-echo-medium",
