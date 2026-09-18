@@ -46,7 +46,7 @@ export function ExperimentsPage() {
   // Configuration
   const [experimentType, setExperimentType] = useState<ExperimentType>('final_evaluation');
   const [name, setName] = useState('');
-  const [datasetPath, setDatasetPath] = useState('data/benchmarks/sample_prompts.json');
+  const [datasetPath, setDatasetPath] = useState('data/benchmarks/routing_prompts.json');
   const [qualityFloor, setQualityFloor] = useState(0.9);
   const [maxPrompts, setMaxPrompts] = useState(8);
   const [strategies, setStrategies] = useState<BenchmarkStrategy[]>([
@@ -216,7 +216,7 @@ export function ExperimentsPage() {
     <div>
       <PageHeader
         title="Experiment Lab"
-        description="Define, run, and compare controlled routing experiments against mock-provider benchmarks."
+        description="Define, run, and compare controlled routing experiments against real model responses."
       />
 
       <Card className="mb-6">

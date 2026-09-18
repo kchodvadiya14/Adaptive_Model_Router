@@ -62,6 +62,16 @@ def load_training_split(dataset_id: str, test_size: float = 0.2, val_size: float
 
     texts = [record.prompt for record in records]
     labels = np.array([strong_better_label(record) for record in records], dtype=np.int64)
+    if len(np.unique(labels)) < 2:
+        outcome = (
+            "a cheaper model matched the strong model on every prompt"
+            if labels[0] == 0
+            else "the strong model beat the cheaper models on every prompt"
+        )
+        raise ValueError(
+            f"All {len(records)} records have the same label ({outcome}), so there is nothing for a "
+            "router to learn. Generate a dataset from a larger prompt set that mixes easy and hard prompts."
+        )
 
     test_count = _split_count(len(texts), test_size)
     train_texts, test_texts, y_train, y_test = train_test_split(
@@ -83,6 +93,14 @@ def load_training_split(dataset_id: str, test_size: float = 0.2, val_size: float
             test_size=val_count,
             random_state=42,
             stratify=_stratify_if_possible(y_train, val_count),
+        )
+
+    if len(np.unique(y_train)) < 2:
+        strong_needed = int(labels.sum())
+        raise ValueError(
+            f"Only {strong_needed} of {len(records)} records needed the strong model (the rest were handled "
+            "by a cheaper model), which is too few to train on after the held-out test split. Generate a "
+            "larger dataset with more hard prompts so each outcome has several examples."
         )
 
     return TrainingSplit(

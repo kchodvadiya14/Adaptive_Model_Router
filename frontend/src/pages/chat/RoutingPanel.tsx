@@ -164,6 +164,14 @@ export function RoutingPanel({
               )}
               <Row label="Quality estimate">{formatPercent(routing.estimated_quality, 0)}</Row>
               <Row label="Est. cost">{formatCost(routing.estimated_cost)}</Row>
+              <Row label="Strong-model cost">{formatCost(routing.strong_model_baseline_cost)}</Row>
+              <Row label="Saved vs strong">
+                <span className="text-success-300">
+                  {formatCost(routing.cost_saved_vs_strong)}
+                  {routing.strong_model_baseline_cost > 0 &&
+                    ` (${formatPercent(routing.cost_saved_vs_strong / routing.strong_model_baseline_cost, 0)})`}
+                </span>
+              </Row>
               {response && <Row label="Actual latency">{formatMs(response.latency_ms)}</Row>}
               {routing.preferred_model && (
                 <Row label="Preferred model">

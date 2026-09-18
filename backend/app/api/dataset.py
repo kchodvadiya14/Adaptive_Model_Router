@@ -30,6 +30,7 @@ async def generate_dataset(request: DatasetGenerateRequest) -> DatasetGenerateJo
             quality_floor=request.quality_floor,
             max_prompts=request.max_prompts,
             description=request.description,
+            on_progress=lambda fraction: job_manager.update_progress(job_id, 0.05 + 0.9 * fraction),
         )
 
     job_manager.start_job(job_id, _execute)

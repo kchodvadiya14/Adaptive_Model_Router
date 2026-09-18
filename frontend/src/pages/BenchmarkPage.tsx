@@ -51,7 +51,7 @@ function statusLabel(status: BenchmarkJobStatus['status'] | 'starting'): string 
 }
 
 export function BenchmarkPage() {
-  const [datasetPath, setDatasetPath] = useState('data/benchmarks/sample_prompts.json');
+  const [datasetPath, setDatasetPath] = useState('data/benchmarks/routing_prompts.json');
   const [qualityFloor, setQualityFloor] = useState(0.9);
   const [maxPrompts, setMaxPrompts] = useState(8);
   const [strategies, setStrategies] = useState<BenchmarkStrategy[]>(ALL_STRATEGIES);

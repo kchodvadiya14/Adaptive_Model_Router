@@ -34,6 +34,9 @@ class DatasetJobManager:
             manifest=DatasetManifest.model_validate(record.result) if record.result else None,
         )
 
+    def update_progress(self, job_id: str, progress: float) -> None:
+        self._manager.update_progress(job_id, progress)
+
     def start_job(self, job_id: str, coroutine_factory: Callable[[], Coroutine[Any, Any, Any]]) -> None:
         self._manager.start_job(job_id, coroutine_factory, initial_progress=0.05)
 

@@ -1,0 +1,38 @@
+{
+  "id": "193fe400-36be-485b-b3b2-baf7286144b6",
+  "name": "Rule-based router on live models",
+  "experiment_type": "router_comparison",
+  "dataset_path": "data/benchmarks/routing_prompts.json",
+  "created_at": "2026-09-18T16:39:09.850222+00:00",
+  "sections": [
+    {
+      "name": "Router Comparison",
+      "experiment_type": "router_comparison",
+      "variants": [
+        {
+          "name": "rule_based",
+          "description": "Adaptive router using rule_based implementation",
+          "metrics": {
+            "total_requests": 4,
+            "average_quality": 0.995,
+            "average_cost": 0.00003229,
+            "total_cost": 0.00012915,
+            "cost_reduction": 0.8013,
+            "quality_retention": 0.995,
+            "routing_accuracy": 1.0,
+            "strong_model_usage": 0.0,
+            "average_latency_ms": 774.25,
+            "p50_latency_ms": 880.23,
+            "p95_latency_ms": 1118.48
+          },
+          "config": {
+            "router_type": "rule_based",
+            "quality_floor": 0.8
+          }
+        }
+      ]
+    }
+  ],
+  "summary": "Final evaluation completed using mock-provider experiments.\nRouter Comparison: 1 variant(s).\n  Lowest cost in 'Router Comparison': rule_based ($0.000032, quality 99.50%).\n  Highest quality in 'Router Comparison': rule_based (quality 99.50%, cost $0.000032).",
+  "markdown_summary": "# Final Evaluation Report\n\nResults from controlled mock-provider experiments.\n\n## Router Comparison\n\n| Variant | Avg Quality | Avg Cost | Cost Reduction | Quality Retention | Strong Usage |\n|---------|-------------|----------|----------------|-------------------|--------------|\n| rule_based | 99.50% | $0.000032 | 80.13% | 99.50% | 0.00% |\n"
+}

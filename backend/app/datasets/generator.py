@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from app.datasets.json_dataset import JsonDatasetAdapter
@@ -10,12 +12,16 @@ from app.datasets.storage import add_manifest, save_records
 from app.evaluation.judge import get_judge
 from app.models.registry import get_model_registry
 from app.providers.base import GenerationRequest
+from app.providers.base import ProviderError
 from app.providers.factory import get_provider_for_model
+from app.providers.retry import BATCH_MAX_TOKENS, retry_transient
 from app.router.base import get_router
 from app.schemas.dataset import DatasetManifest, PreferenceRecord
 from app.schemas.evaluation import JudgeScore
 from app.schemas.models import ModelTier
 from app.schemas.routing import RouteRequest
+
+logger = logging.getLogger(__name__)
 
 
 def compute_preference_labels(
@@ -36,6 +42,12 @@ def compute_preference_labels(
     return preferred, sufficient["small"], sufficient["medium"], sufficient["strong"]
 
 
+def _judge_label(judge) -> str:
+    model_id = getattr(judge, "model_id", None)
+    kind = judge.__class__.__name__.replace("Judge", "").lower() or "mock"
+    return f"{kind}:{model_id}" if kind == "registry" and model_id else kind
+
+
 class PreferenceDatasetGenerator:
     async def generate(
         self,
@@ -45,6 +57,7 @@ class PreferenceDatasetGenerator:
         quality_floor: float,
         max_prompts: int,
         description: str = "",
+        on_progress: Callable[[float], None] | None = None,
     ) -> DatasetManifest:
         adapter = JsonDatasetAdapter(source_path)
         prompts = adapter.load()[:max_prompts]
@@ -61,23 +74,31 @@ class PreferenceDatasetGenerator:
         dataset_id = str(uuid.uuid4())
         records: list[PreferenceRecord] = []
 
-        for item in prompts:
+        skipped: list[str] = []
+
+        for index, item in enumerate(prompts):
+            if on_progress is not None:
+                on_progress(index / len(prompts))
             routing = router.route(
                 RouteRequest(prompt=item.prompt),
                 configuration={"quality_floor": quality_floor},
             )
+            request = GenerationRequest(messages=[{"role": "user", "content": item.prompt}], max_tokens=BATCH_MAX_TOKENS)
             tier_responses: dict[str, tuple[str, JudgeScore]] = {}
-            for tier, model in (
-                ("small", small_model),
-                ("medium", medium_model),
-                ("strong", strong_model),
-            ):
-                provider = get_provider_for_model(model)
-                generation = await provider.generate(
-                    GenerationRequest(messages=[{"role": "user", "content": item.prompt}], max_tokens=512)
-                )
-                score = await judge.evaluate(item.prompt, generation.content)
-                tier_responses[tier] = (generation.content, score)
+            try:
+                for tier, model in (
+                    ("small", small_model),
+                    ("medium", medium_model),
+                    ("strong", strong_model),
+                ):
+                    provider = get_provider_for_model(model)
+                    generation = await retry_transient(lambda: provider.generate(request))
+                    score = await retry_transient(lambda: judge.evaluate(item.prompt, generation.content))
+                    tier_responses[tier] = (generation.content, score)
+            except ProviderError as exc:
+                logger.warning("Skipping prompt %s after provider errors: %s", item.id, exc)
+                skipped.append(item.id)
+                continue
 
             small_score = tier_responses["small"][1].overall
             medium_score = tier_responses["medium"][1].overall
@@ -114,6 +135,12 @@ class PreferenceDatasetGenerator:
                 )
             )
 
+        if not records:
+            raise ValueError(f"Every prompt failed after retries ({len(skipped)} skipped); no dataset was saved.")
+        if skipped:
+            note = f"{len(skipped)} prompt(s) skipped after provider errors: {', '.join(skipped)}"
+            description = f"{description} ({note})" if description else note
+
         output_path = save_records(dataset_id, records)
         manifest = DatasetManifest(
             id=dataset_id,
@@ -123,7 +150,7 @@ class PreferenceDatasetGenerator:
             output_path=str(output_path),
             quality_floor=quality_floor,
             record_count=len(records),
-            judge_provider=judge.__class__.__name__.replace("Judge", "").lower() or "mock",
+            judge_provider=_judge_label(judge),
             description=description,
         )
         add_manifest(manifest)

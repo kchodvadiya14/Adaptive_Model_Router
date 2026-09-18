@@ -149,8 +149,61 @@ class LLMJudge(BaseJudge):
         )
 
 
+def _extract_json(text: str) -> dict:
+    """Parse the first JSON object in a model reply, tolerating code fences and prose."""
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        raise ProviderError("Judge reply contained no JSON object.", code=ProviderErrorCode.INVALID_RESPONSE)
+    try:
+        return json.loads(text[start : end + 1])
+    except json.JSONDecodeError as exc:
+        raise ProviderError("Judge reply was not valid JSON.", code=ProviderErrorCode.INVALID_RESPONSE) from exc
+
+
+class RegistryJudge(LLMJudge):
+    """LLM judge that runs on any registry model through the gateway's own provider adapters."""
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        super().__init__(settings)
+        self.model_id = self.settings.judge_model_id
+
+    async def _call_judge(self, system_prompt: str, user_prompt: str) -> dict:
+        from app.models.registry import get_model_registry
+        from app.providers.base import GenerationRequest
+        from app.providers.factory import get_provider_for_model
+
+        model = get_model_registry().get_model(self.model_id)
+        if model is None:
+            raise ProviderError(
+                f"Judge model '{self.model_id}' is not in the model registry.",
+                code=ProviderErrorCode.MODEL_UNAVAILABLE,
+            )
+        provider = get_provider_for_model(model)
+        result = await provider.generate(
+            GenerationRequest(
+                messages=[
+                    {"role": "system", "content": system_prompt + " Reply with the JSON object only."},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=2048,
+                temperature=0.0,
+            )
+        )
+        return _extract_json(result.content)
+
+    async def evaluate(self, prompt: str, response: str) -> JudgeScore:
+        score = await super().evaluate(prompt, response)
+        return score.model_copy(update={"judge_provider": f"registry:{self.model_id}"})
+
+    async def compare(self, prompt: str, response_a: str, response_b: str, label_a: str, label_b: str) -> PairwiseJudgeResult:
+        result = await super().compare(prompt, response_a, response_b, label_a, label_b)
+        return result.model_copy(update={"judge_provider": f"registry:{self.model_id}"})
+
+
 def get_judge(settings: Settings | None = None) -> BaseJudge:
     settings = settings or get_settings()
     if settings.judge_provider == "openai":
         return LLMJudge(settings)
+    if settings.judge_provider == "registry":
+        return RegistryJudge(settings)
     return MockJudge()

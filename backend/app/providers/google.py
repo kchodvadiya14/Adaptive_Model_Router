@@ -59,14 +59,13 @@ class GoogleProvider(BaseModelProvider):
         if system_instruction:
             payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
 
-        url = (
-            f"{self.base_url}/models/{self.model.id}:generateContent"
-            f"?key={self.settings.google_api_key}"
-        )
+        url = f"{self.base_url}/models/{self.model.id}:generateContent"
+        # Header rather than ?key= query param so the key never appears in logged URLs.
+        headers = {"x-goog-api-key": self.settings.google_api_key}
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(url, json=payload)
+                response = await client.post(url, json=payload, headers=headers)
         except httpx.TimeoutException as exc:
             raise ProviderError("Google request timed out.", code=ProviderErrorCode.TIMEOUT) from exc
         except httpx.RequestError as exc:

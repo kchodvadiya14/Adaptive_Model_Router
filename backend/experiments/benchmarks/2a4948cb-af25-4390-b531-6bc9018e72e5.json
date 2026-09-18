@@ -1,0 +1,638 @@
+{
+  "id": "2a4948cb-af25-4390-b531-6bc9018e72e5",
+  "dataset_path": "data/benchmarks/routing_prompts.json",
+  "quality_floor": 0.8,
+  "created_at": "2026-09-18T16:38:27.043072+00:00",
+  "strategies": [
+    {
+      "strategy": "always_strong",
+      "metrics": {
+        "total_requests": 6,
+        "average_quality": 0.875,
+        "average_cost": 0.00012338,
+        "total_cost": 0.0007403,
+        "cost_reduction": 0.0004,
+        "quality_retention": 0.9924,
+        "routing_accuracy": 1.0,
+        "strong_model_usage": 1.0,
+        "average_latency_ms": 1626.93,
+        "p50_latency_ms": 1536.2,
+        "p95_latency_ms": 1844.47
+      },
+      "samples": [
+        {
+          "prompt_id": "e1",
+          "prompt": "What is the capital of Australia?",
+          "strategy": "always_strong",
+          "selected_model": "gemini-3.5-flash-lite",
+          "tier": "strong",
+          "quality": 1.0,
+          "cost": 0.0000249,
+          "latency_ms": 1528.1134999968344,
+          "strong_baseline_cost": 0.0000249,
+          "strong_baseline_quality": 1.0,
+          "judge_reasoning": "The answer correctly identifies Canberra as the capital of Australia, directly addresses the question, provides a complete response, requires no complex reasoning, and follows the instruction perfectly.",
+          "routing": null
+        },
+        {
+          "prompt_id": "e2",
+          "prompt": "Translate 'Where is the train station?' into French.",
+          "strategy": "always_strong",
+          "selected_model": "gemini-3.5-flash-lite",
+          "tier": "strong",
+          "quality": 1.0,
+          "cost": 0.0001911,
+          "latency_ms": 1790.8521999997902,
+          "strong_baseline_cost": 0.0001914,
+          "strong_baseline_quality": 1.0,
+          "judge_reasoning": "The assistant correctly translates the phrase, stays on topic, provides a complete answer (including pronunciation and a polite variant), shows appropriate reasoning, and follows the instruction precisely.",
+          "routing": null
+        },
+        {
+          "prompt_id": "e3",
+          "prompt": "Convert 72 degrees Fahrenheit to Celsius.",
+          "strategy": "always_strong",
+          "selected_model": "gemini-3.5-flash-lite",
+          "tier": "strong",
+          "quality": 1.0,
+          "cost": 0.000278,
+          "latency_ms": 1844.4691999975475,
+          "strong_baseline_cost": 0.000278,
+          "strong_baseline_quality": 1.0,
+          "judge_reasoning": "The answer correctly applies the Fahrenheit‑to‑Celsius formula, performs accurate arithmetic, presents the steps clearly, and directly provides the requested conversion.",
+          "routing": null
+        },
+        {
+          "prompt_id": "e4",
+          "prompt": "Give me three synonyms for the word 'happy'.",
+          "strategy": "always_strong",
+          "selected_model": "gemini-3.5-flash-lite",
+          "tier": "strong",
+          "quality": 1.0,
+          "cost": 0.0000783,
+          "latency_ms": 1510.4695000045467,
+          "strong_baseline_cost": 0.0000783,
+          "strong_baseline_quality": 0.99,
+          "judge_reasoning": "The assistant correctly provided exactly three appropriate synonyms for 'happy', directly addressing the request with a clear, complete list.",
+          "routing": null
+        },
+        {
+          "prompt_id": "e5",
+          "prompt": "Extract the email addresses from: 'Contact sales@acme.io or support@acme.io, not info@old-acme.com (retired).'",
+          "strategy": "always_strong",
+          "selected_model": "gemini-3.5-flash-lite",
+          "tier": "strong",
+          "quality": 0.25,
+          "cost": 0.0001005,
+          "latency_ms": 1536.1967999997432,
+          "strong_baseline_cost": 0.0000981,
+          "strong_baseline_quality": 0.3,
+          "judge_reasoning": "The assistant listed all three email addresses, but the prompt explicitly said to exclude the retired info@old-acme.com. Thus it failed to follow the instruction, resulting in low correctness and instruction adherence. The response is only partially relevant and lacks reasoning.",
+          "routing": null
+        },
+        {
+          "prompt_id": "e6",
+          "prompt": "Summarize in one sentence: The meeting moved from Tuesday to Thursday because the client requested more time to review the proposal.",
+          "strategy": "always_strong",
+          "selected_model": "gemini-3.5-flash-lite",
+          "tier": "strong",
+          "quality": 1.0,
+          "cost": 0.0000675,
+          "latency_ms": 1551.4971000011428,
+          "strong_baseline_cost": 0.0000699,
+          "strong_baseline_quality": 1.0,
+          "judge_reasoning": "The assistant provided a concise one‑sentence summary that accurately captures all key details of the original statement, directly follows the instruction, and requires no additional reasoning.",
+          "routing": null
+        }
+      ]
+    },
+    {
+      "strategy": "always_cheap",
+      "metrics": {
+        "total_requests": 6,
+        "average_quality": 0.8783,
+        "average_cost": 0.00003713,
+        "total_cost": 0.00022275,
+        "cost_reduction": 0.8575,
+        "quality_retention": 0.9962,
+        "routing_accuracy": 1.0,
+        "strong_model_usage": 0.0,
+        "average_latency_ms": 1072.1,
+        "p50_latency_ms": 1049.91,
+        "p95_latency_ms": 1344.96
+      },
+      "samples": [
+        {
+          "prompt_id": "e1",
+          "prompt": "What is the capital of Australia?",
+          "strategy": "always_cheap",
+          "selected_model": "openai/gpt-oss-20b",
+          "tier": "small",
+          "quality": 1.0,
+          "cost": 0.00002265,
+          "latency_ms": 778.0706999983522,
+          "strong_baseline_cost": 0.0001424,
+          "strong_baseline_quality": 1.0,
+          "judge_reasoning": "The answer correctly identifies Canberra as the capital of Australia, directly addresses the question, provides a complete response, requires no complex reasoning, and follows the instruction perfectly.",
+          "routing": null
+        },
+        {
+          "prompt_id": "e2",
+          "prompt": "Translate 'Where is the train station?' into French.",
+          "strategy": "always_cheap",
+          "selected_model": "openai/gpt-oss-20b",
+          "tier": "small",
+          "quality": 1.0,
+          "cost": 0.00002265,
+          "latency_ms": 1049.9082999958773,
+          "strong_baseline_cost": 0.0001414,
+          "strong_baseline_quality": 1.0,
+          "judge_reasoning": "The assistant gave the correct French translation, directly addressed the request, and required no additional context.",
+          "routing": null
+        },
+        {
+          "prompt_id": "e3",
+          "prompt": "Convert 72 degrees Fahrenheit to Celsius.",
+          "strategy": "always_cheap",
+          "selected_model": "openai/gpt-oss-20b",
+          "tier": "small",
+          "quality": 1.0,
+          "cost": 0.00003683,
+          "latency_ms": 1171.6606999980286,
+          "strong_baseline_cost": 0.0002605,
+          "strong_baseline_quality": 1.0,
+          "judge_reasoning": "The assistant correctly computed the Celsius value (22.22°C), provided both an approximate and exact representation, directly answered the conversion request, and gave a complete and accurate response.",
+          "routing": null
+        },
+        {
+          "prompt_id": "e4",
+          "prompt": "Give me three synonyms for the word 'happy'.",
+          "strategy": "always_cheap",
+          "selected_model": "openai/gpt-oss-20b",
+          "tier": "small",
+          "quality": 0.98,
+          "cost": 0.00002827,
+          "latency_ms": 1091.6695999985677,
+          "strong_baseline_cost": 0.0001883,
+          "strong_baseline_quality": 1.0,
+          "judge_reasoning": "The assistant correctly provided three appropriate synonyms for 'happy', directly answering the prompt with a complete list and no extraneous content.",
+          "routing": null
+        },
+        {
+          "prompt_id": "e5",
+          "prompt": "Extract the email addresses from: 'Contact sales@acme.io or support@acme.io, not info@old-acme.com (retired).'",
+          "strategy": "always_cheap",
+          "selected_model": "openai/gpt-oss-20b",
+          "tier": "small",
+          "quality": 0.3,
+          "cost": 0.00007875,
+          "latency_ms": 1344.9589000010747,
+          "strong_baseline_cost": 0.0006006,
+          "strong_baseline_quality": 0.3,
+          "judge_reasoning": "The assistant listed all three email addresses, but the prompt explicitly excluded info@old-acme.com, so the extraction is incorrect. The response is relevant and includes email strings, but fails to apply the exclusion rule, showing poor reasoning and instruction adherence.",
+          "routing": null
+        },
+        {
+          "prompt_id": "e6",
+          "prompt": "Summarize in one sentence: The meeting moved from Tuesday to Thursday because the client requested more time to review the proposal.",
+          "strategy": "always_cheap",
+          "selected_model": "openai/gpt-oss-20b",
+          "tier": "small",
+          "quality": 0.99,
+          "cost": 0.0000336,
+          "latency_ms": 996.3247000050615,
+          "strong_baseline_cost": 0.0002299,
+          "strong_baseline_quality": 0.99,
+          "judge_reasoning": "The assistant provided a concise one‑sentence summary that accurately captures all key details of the original statement, directly addressing the prompt with no extraneous information.",
+          "routing": null
+        }
+      ]
+    },
+    {
+      "strategy": "adaptive_router",
+      "metrics": {
+        "total_requests": 6,
+        "average_quality": 0.995,
+        "average_cost": 0.00004147,
+        "total_cost": 0.00024884,
+        "cost_reduction": 0.7932,
+        "quality_retention": 1.1159,
+        "routing_accuracy": 1.0,
+        "strong_model_usage": 0.0,
+        "average_latency_ms": 815.94,
+        "p50_latency_ms": 774.72,
+        "p95_latency_ms": 1116.91
+      },
+      "samples": [
+        {
+          "prompt_id": "e1",
+          "prompt": "What is the capital of Australia?",
+          "strategy": "adaptive_router",
+          "selected_model": "openai/gpt-oss-20b",
+          "tier": "small",
+          "quality": 1.0,
+          "cost": 0.00002265,
+          "latency_ms": 1116.906100003689,
+          "strong_baseline_cost": 0.0001424,
+          "strong_baseline_quality": 1.0,
+          "judge_reasoning": "The response correctly identifies Canberra as the capital of Australia, directly answers the question, provides a complete answer, requires no complex reasoning, and follows the instruction to answer the query.",
+          "routing": {
+            "selected_model": "openai/gpt-oss-20b",
+            "model_tier": "small",
+            "confidence": 0.62,
+            "difficulty": 0.29,
+            "task_type": "general_qa",
+            "reason": "Small model 'GPT-OSS 20B (Groq)' is the best cost/latency trade-off (cost priority 70%, latency priority 30%) satisfying the quality requirement",
+            "estimated_cost": 0.0000774,
+            "estimated_quality": 0.8,
+            "strong_model_baseline_cost": 0.0006424,
+            "cost_saved_vs_strong": 0.000565,
+            "explanation": [
+              "Task type: General Qa",
+              "Difficulty: Easy (0.29)",
+              "Quality requirement: 80%",
+              "Expected small model quality: 0.80 (meets floor)",
+              "Expected medium model quality: 0.88 (meets floor)",
+              "Expected strong model quality: 0.94 (meets floor)",
+              "Small model 'GPT-OSS 20B (Groq)' is the best cost/latency trade-off (cost priority 70%, latency priority 30%) satisfying the quality requirement"
+            ],
+            "tier_qualities": [
+              {
+                "tier": "small",
+                "model_id": "openai/gpt-oss-20b",
+                "expected_quality": 0.8,
+                "estimated_cost": 0.0000774,
+                "meets_quality_floor": true
+              },
+              {
+                "tier": "medium",
+                "model_id": "openai/gpt-oss-120b",
+                "expected_quality": 0.88,
+                "estimated_cost": 0.0001548,
+                "meets_quality_floor": true
+              },
+              {
+                "tier": "strong",
+                "model_id": "gemini-3.5-flash-lite",
+                "expected_quality": 0.94,
+                "estimated_cost": 0.0006424,
+                "meets_quality_floor": true
+              }
+            ],
+            "features": {
+              "prompt_length": 33,
+              "word_count": 6,
+              "has_code": false,
+              "has_math": false,
+              "instruction_count": 0,
+              "reasoning_score": 0.0,
+              "requested_output_format": null
+            },
+            "preferred_model": null,
+            "preferred_model_honored": null
+          }
+        },
+        {
+          "prompt_id": "e2",
+          "prompt": "Translate 'Where is the train station?' into French.",
+          "strategy": "adaptive_router",
+          "selected_model": "openai/gpt-oss-120b",
+          "tier": "medium",
+          "quality": 1.0,
+          "cost": 0.0000405,
+          "latency_ms": 703.512200001569,
+          "strong_baseline_cost": 0.0001214,
+          "strong_baseline_quality": 1.0,
+          "judge_reasoning": "The assistant correctly provided the French translation of the given English sentence, directly answering the prompt with no errors or omissions.",
+          "routing": {
+            "selected_model": "openai/gpt-oss-120b",
+            "model_tier": "medium",
+            "confidence": 0.85,
+            "difficulty": 0.34,
+            "task_type": "translation",
+            "reason": "Medium model 'GPT-OSS 120B (Groq)' is the best cost/latency trade-off (cost priority 70%, latency priority 30%) satisfying the quality requirement",
+            "estimated_cost": 0.00015555,
+            "estimated_quality": 0.88,
+            "strong_model_baseline_cost": 0.0006439,
+            "cost_saved_vs_strong": 0.00048835,
+            "explanation": [
+              "Task type: Translation",
+              "Difficulty: Medium (0.34)",
+              "Quality requirement: 80%",
+              "Expected small model quality: 0.79 (below floor)",
+              "Expected medium model quality: 0.88 (meets floor)",
+              "Expected strong model quality: 0.93 (meets floor)",
+              "Medium model 'GPT-OSS 120B (Groq)' is the best cost/latency trade-off (cost priority 70%, latency priority 30%) satisfying the quality requirement"
+            ],
+            "tier_qualities": [
+              {
+                "tier": "small",
+                "model_id": "openai/gpt-oss-20b",
+                "expected_quality": 0.79,
+                "estimated_cost": 0.00007777,
+                "meets_quality_floor": false
+              },
+              {
+                "tier": "medium",
+                "model_id": "openai/gpt-oss-120b",
+                "expected_quality": 0.88,
+                "estimated_cost": 0.00015555,
+                "meets_quality_floor": true
+              },
+              {
+                "tier": "strong",
+                "model_id": "gemini-3.5-flash-lite",
+                "expected_quality": 0.93,
+                "estimated_cost": 0.0006439,
+                "meets_quality_floor": true
+              }
+            ],
+            "features": {
+              "prompt_length": 52,
+              "word_count": 8,
+              "has_code": false,
+              "has_math": false,
+              "instruction_count": 0,
+              "reasoning_score": 0.0,
+              "requested_output_format": null
+            },
+            "preferred_model": null,
+            "preferred_model_honored": null
+          }
+        },
+        {
+          "prompt_id": "e3",
+          "prompt": "Convert 72 degrees Fahrenheit to Celsius.",
+          "strategy": "adaptive_router",
+          "selected_model": "openai/gpt-oss-20b",
+          "tier": "small",
+          "quality": 1.0,
+          "cost": 0.00006142,
+          "latency_ms": 851.9834000035189,
+          "strong_baseline_cost": 0.0004655,
+          "strong_baseline_quality": 1.0,
+          "judge_reasoning": "The answer correctly applies the Fahrenheit‑to‑Celsius formula, shows the calculation steps, and provides an accurate result (~22.2 °C), fully addressing the prompt.",
+          "routing": {
+            "selected_model": "openai/gpt-oss-20b",
+            "model_tier": "small",
+            "confidence": 0.6,
+            "difficulty": 0.25,
+            "task_type": "general_qa",
+            "reason": "Small model 'GPT-OSS 20B (Groq)' is the best cost/latency trade-off (cost priority 70%, latency priority 30%) satisfying the quality requirement",
+            "estimated_cost": 0.00007755,
+            "estimated_quality": 0.8,
+            "strong_model_baseline_cost": 0.000643,
+            "cost_saved_vs_strong": 0.00056545,
+            "explanation": [
+              "Task type: General Qa",
+              "Difficulty: Easy (0.25)",
+              "Quality requirement: 80%",
+              "Expected small model quality: 0.80 (meets floor)",
+              "Expected medium model quality: 0.89 (meets floor)",
+              "Expected strong model quality: 0.94 (meets floor)",
+              "Small model 'GPT-OSS 20B (Groq)' is the best cost/latency trade-off (cost priority 70%, latency priority 30%) satisfying the quality requirement"
+            ],
+            "tier_qualities": [
+              {
+                "tier": "small",
+                "model_id": "openai/gpt-oss-20b",
+                "expected_quality": 0.8,
+                "estimated_cost": 0.00007755,
+                "meets_quality_floor": true
+              },
+              {
+                "tier": "medium",
+                "model_id": "openai/gpt-oss-120b",
+                "expected_quality": 0.89,
+                "estimated_cost": 0.0001551,
+                "meets_quality_floor": true
+              },
+              {
+                "tier": "strong",
+                "model_id": "gemini-3.5-flash-lite",
+                "expected_quality": 0.94,
+                "estimated_cost": 0.000643,
+                "meets_quality_floor": true
+              }
+            ],
+            "features": {
+              "prompt_length": 41,
+              "word_count": 6,
+              "has_code": false,
+              "has_math": false,
+              "instruction_count": 0,
+              "reasoning_score": 0.0,
+              "requested_output_format": null
+            },
+            "preferred_model": null,
+            "preferred_model_honored": null
+          }
+        },
+        {
+          "prompt_id": "e4",
+          "prompt": "Give me three synonyms for the word 'happy'.",
+          "strategy": "adaptive_router",
+          "selected_model": "openai/gpt-oss-20b",
+          "tier": "small",
+          "quality": 0.98,
+          "cost": 0.00002617,
+          "latency_ms": 774.7180000005756,
+          "strong_baseline_cost": 0.0001708,
+          "strong_baseline_quality": 1.0,
+          "judge_reasoning": "The assistant correctly provided three appropriate synonyms for 'happy', directly addressing the request with relevant and complete information. The answer is concise and meets all instructions; minor deduction for lack of explicit reasoning, though none was required.",
+          "routing": {
+            "selected_model": "openai/gpt-oss-20b",
+            "model_tier": "small",
+            "confidence": 0.6,
+            "difficulty": 0.25,
+            "task_type": "general_qa",
+            "reason": "Small model 'GPT-OSS 20B (Groq)' is the best cost/latency trade-off (cost priority 70%, latency priority 30%) satisfying the quality requirement",
+            "estimated_cost": 0.00007763,
+            "estimated_quality": 0.8,
+            "strong_model_baseline_cost": 0.0006433,
+            "cost_saved_vs_strong": 0.00056567,
+            "explanation": [
+              "Task type: General Qa",
+              "Difficulty: Easy (0.25)",
+              "Quality requirement: 80%",
+              "Expected small model quality: 0.80 (meets floor)",
+              "Expected medium model quality: 0.89 (meets floor)",
+              "Expected strong model quality: 0.94 (meets floor)",
+              "Small model 'GPT-OSS 20B (Groq)' is the best cost/latency trade-off (cost priority 70%, latency priority 30%) satisfying the quality requirement"
+            ],
+            "tier_qualities": [
+              {
+                "tier": "small",
+                "model_id": "openai/gpt-oss-20b",
+                "expected_quality": 0.8,
+                "estimated_cost": 0.00007763,
+                "meets_quality_floor": true
+              },
+              {
+                "tier": "medium",
+                "model_id": "openai/gpt-oss-120b",
+                "expected_quality": 0.89,
+                "estimated_cost": 0.00015525,
+                "meets_quality_floor": true
+              },
+              {
+                "tier": "strong",
+                "model_id": "gemini-3.5-flash-lite",
+                "expected_quality": 0.94,
+                "estimated_cost": 0.0006433,
+                "meets_quality_floor": true
+              }
+            ],
+            "features": {
+              "prompt_length": 44,
+              "word_count": 8,
+              "has_code": false,
+              "has_math": false,
+              "instruction_count": 0,
+              "reasoning_score": 0.0,
+              "requested_output_format": null
+            },
+            "preferred_model": null,
+            "preferred_model_honored": null
+          }
+        },
+        {
+          "prompt_id": "e5",
+          "prompt": "Extract the email addresses from: 'Contact sales@acme.io or support@acme.io, not info@old-acme.com (retired).'",
+          "strategy": "adaptive_router",
+          "selected_model": "openai/gpt-oss-120b",
+          "tier": "medium",
+          "quality": 1.0,
+          "cost": 0.0000591,
+          "latency_ms": 920.4295999952592,
+          "strong_baseline_cost": 0.0001906,
+          "strong_baseline_quality": 0.35,
+          "judge_reasoning": "The assistant correctly identified and listed the two active email addresses, excluded the retired one as instructed, and provided a clear, concise answer.",
+          "routing": {
+            "selected_model": "openai/gpt-oss-120b",
+            "model_tier": "medium",
+            "confidence": 0.81,
+            "difficulty": 0.36,
+            "task_type": "extraction",
+            "reason": "Medium model 'GPT-OSS 120B (Groq)' is the best cost/latency trade-off (cost priority 70%, latency priority 30%) satisfying the quality requirement",
+            "estimated_cost": 0.00015765,
+            "estimated_quality": 0.87,
+            "strong_model_baseline_cost": 0.0006481,
+            "cost_saved_vs_strong": 0.00049045,
+            "explanation": [
+              "Task type: Extraction",
+              "Difficulty: Medium (0.36)",
+              "Quality requirement: 80%",
+              "Expected small model quality: 0.79 (below floor)",
+              "Expected medium model quality: 0.87 (meets floor)",
+              "Expected strong model quality: 0.93 (meets floor)",
+              "Medium model 'GPT-OSS 120B (Groq)' is the best cost/latency trade-off (cost priority 70%, latency priority 30%) satisfying the quality requirement"
+            ],
+            "tier_qualities": [
+              {
+                "tier": "small",
+                "model_id": "openai/gpt-oss-20b",
+                "expected_quality": 0.79,
+                "estimated_cost": 0.00007882,
+                "meets_quality_floor": false
+              },
+              {
+                "tier": "medium",
+                "model_id": "openai/gpt-oss-120b",
+                "expected_quality": 0.87,
+                "estimated_cost": 0.00015765,
+                "meets_quality_floor": true
+              },
+              {
+                "tier": "strong",
+                "model_id": "gemini-3.5-flash-lite",
+                "expected_quality": 0.93,
+                "estimated_cost": 0.0006481,
+                "meets_quality_floor": true
+              }
+            ],
+            "features": {
+              "prompt_length": 110,
+              "word_count": 19,
+              "has_code": false,
+              "has_math": false,
+              "instruction_count": 0,
+              "reasoning_score": 0.0,
+              "requested_output_format": null
+            },
+            "preferred_model": null,
+            "preferred_model_honored": null
+          }
+        },
+        {
+          "prompt_id": "e6",
+          "prompt": "Summarize in one sentence: The meeting moved from Tuesday to Thursday because the client requested more time to review the proposal.",
+          "strategy": "adaptive_router",
+          "selected_model": "openai/gpt-oss-120b",
+          "tier": "medium",
+          "quality": 0.99,
+          "cost": 0.000039,
+          "latency_ms": 528.1178000004729,
+          "strong_baseline_cost": 0.0001124,
+          "strong_baseline_quality": 1.0,
+          "judge_reasoning": "The assistant provided an accurate, concise one‑sentence summary that includes all key details, directly follows the instruction, and requires no additional reasoning.",
+          "routing": {
+            "selected_model": "openai/gpt-oss-120b",
+            "model_tier": "medium",
+            "confidence": 0.84,
+            "difficulty": 0.31,
+            "task_type": "summarization",
+            "reason": "Medium model 'GPT-OSS 120B (Groq)' is the best cost/latency trade-off (cost priority 70%, latency priority 30%) satisfying the quality requirement",
+            "estimated_cost": 0.00015855,
+            "estimated_quality": 0.88,
+            "strong_model_baseline_cost": 0.0006499,
+            "cost_saved_vs_strong": 0.00049135,
+            "explanation": [
+              "Task type: Summarization",
+              "Difficulty: Medium (0.31)",
+              "Quality requirement: 80%",
+              "Expected small model quality: 0.79 (below floor)",
+              "Expected medium model quality: 0.88 (meets floor)",
+              "Expected strong model quality: 0.93 (meets floor)",
+              "Medium model 'GPT-OSS 120B (Groq)' is the best cost/latency trade-off (cost priority 70%, latency priority 30%) satisfying the quality requirement"
+            ],
+            "tier_qualities": [
+              {
+                "tier": "small",
+                "model_id": "openai/gpt-oss-20b",
+                "expected_quality": 0.79,
+                "estimated_cost": 0.00007928,
+                "meets_quality_floor": false
+              },
+              {
+                "tier": "medium",
+                "model_id": "openai/gpt-oss-120b",
+                "expected_quality": 0.88,
+                "estimated_cost": 0.00015855,
+                "meets_quality_floor": true
+              },
+              {
+                "tier": "strong",
+                "model_id": "gemini-3.5-flash-lite",
+                "expected_quality": 0.93,
+                "estimated_cost": 0.0006499,
+                "meets_quality_floor": true
+              }
+            ],
+            "features": {
+              "prompt_length": 132,
+              "word_count": 21,
+              "has_code": false,
+              "has_math": false,
+              "instruction_count": 0,
+              "reasoning_score": 0.0,
+              "requested_output_format": "summary"
+            },
+            "preferred_model": null,
+            "preferred_model_honored": null
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -97,6 +97,14 @@ class RouterStatusResponse(BaseModel):
     fallback_escalation: str
     enabled_models: int
     total_models: int
+    routing_threshold: float
+    judge_provider: str
+    judge_model_id: str
+    evaluate_on_chat: bool
+    health_failure_threshold: int
+    health_cooldown_seconds: float
+    auth_enabled: bool
+    configured_providers: dict[str, bool]
 
 
 class ModelHealthStatus(BaseModel):

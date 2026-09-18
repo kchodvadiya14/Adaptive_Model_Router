@@ -29,11 +29,9 @@ interface SettingRowProps {
   label: string;
   description?: string;
   value?: React.ReactNode;
-  unavailable?: boolean;
-  envVar?: string;
 }
 
-function SettingRow({ label, description, value, unavailable, envVar }: SettingRowProps) {
+function SettingRow({ label, description, value }: SettingRowProps) {
   return (
     <div className="flex flex-col gap-1 border-b border-line-subtle py-3 last:border-b-0 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
       <div className="sm:max-w-[65%]">
@@ -41,14 +39,7 @@ function SettingRow({ label, description, value, unavailable, envVar }: SettingR
         {description && <p className="mt-0.5 text-xs text-ink-muted">{description}</p>}
       </div>
       <div className="flex shrink-0 items-center gap-2 sm:justify-end">
-        {unavailable ? (
-          <div className="flex flex-col items-start gap-1 sm:items-end">
-            <Badge variant="neutral">Not exposed via API</Badge>
-            {envVar && <span className="font-mono text-[11px] text-ink-disabled">{envVar}</span>}
-          </div>
-        ) : (
-          <span className="text-sm font-medium text-ink-primary">{value ?? '—'}</span>
-        )}
+        <div className="text-sm font-medium text-ink-primary">{value ?? '—'}</div>
       </div>
     </div>
   );
@@ -199,8 +190,7 @@ export function SettingsPage() {
             <SettingRow
               label="Bearer Authentication"
               description="Optional token required on /v1/* OpenAI-compatible endpoints."
-              unavailable
-              envVar="ROUTER_API_KEY"
+              value={routerStatus ? (routerStatus.auth_enabled ? 'Required' : 'Off') : '—'}
             />
           </SectionCard>
 
@@ -225,8 +215,7 @@ export function SettingsPage() {
             <SettingRow
               label="Routing Threshold"
               description="Confidence threshold used by ML-based routers (tfidf / embedding / bert)."
-              unavailable
-              envVar="ROUTING_THRESHOLD"
+              value={routerStatus?.routing_threshold ?? '—'}
             />
             <SettingRow
               label="Fallback"
@@ -263,8 +252,20 @@ export function SettingsPage() {
             )}
             <SettingRow
               label="Provider Credentials"
-              description="API key presence isn't exposed via any endpoint. Verify OPENAI_API_KEY / ANTHROPIC_API_KEY / GOOGLE_API_KEY in the backend environment."
-              unavailable
+              description="Which provider API keys are configured on the backend. Key values are never exposed."
+              value={
+                routerStatus ? (
+                  <div className="flex flex-wrap justify-end gap-1.5">
+                    {Object.entries(routerStatus.configured_providers).map(([provider, configured]) => (
+                      <Badge key={provider} variant={configured ? 'success' : 'neutral'}>
+                        {provider.replace('_', ' ')}: {configured ? 'set' : 'not set'}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : (
+                  '—'
+                )
+              }
             />
             <Link to="/models" className="mt-3 inline-block">
               <Button variant="ghost" size="sm">
@@ -297,16 +298,14 @@ export function SettingsPage() {
             <SettingRow
               label="Failure Threshold"
               description="Consecutive failures before a model's circuit opens."
-              unavailable
-              envVar="HEALTH_FAILURE_THRESHOLD"
+              value={routerStatus?.health_failure_threshold ?? '—'}
             />
             <SettingRow
               label="Cooldown Period"
               description="Time an open circuit waits before a health-check retry."
-              unavailable
-              envVar="HEALTH_COOLDOWN_SECONDS"
+              value={routerStatus ? `${routerStatus.health_cooldown_seconds}s` : '—'}
             />
-            <Link to="/" className="mt-3 inline-block">
+            <Link to="/models" className="mt-3 inline-block">
               <Button variant="ghost" size="sm">
                 View Model Health
                 <ArrowRight className="h-3.5 w-3.5" />
@@ -323,15 +322,22 @@ export function SettingsPage() {
             <SettingRow
               label="Judge Provider"
               description="LLM used to score response quality."
-              unavailable
-              envVar="JUDGE_PROVIDER"
+              value={routerStatus?.judge_provider ?? '—'}
             />
-            <SettingRow label="Judge Model" unavailable envVar="JUDGE_MODEL_ID" />
+            <SettingRow
+              label="Judge Model"
+              value={
+                routerStatus
+                  ? routerStatus.judge_provider === 'mock'
+                    ? 'Heuristic (no LLM)'
+                    : routerStatus.judge_model_id
+                  : '—'
+              }
+            />
             <SettingRow
               label="Evaluate on Chat"
               description="Whether every chat response is auto-scored."
-              unavailable
-              envVar="EVALUATE_ON_CHAT"
+              value={routerStatus ? (routerStatus.evaluate_on_chat ? 'On' : 'Off') : '—'}
             />
             <p className="mt-2 text-xs text-ink-muted">
               On-demand scoring is always available via the Chat Playground&rsquo;s Evaluate Response action.

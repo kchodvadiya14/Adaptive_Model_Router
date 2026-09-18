@@ -58,7 +58,7 @@ export function DatasetPage() {
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
 
-  const [sourcePath, setSourcePath] = useState('data/benchmarks/sample_prompts.json');
+  const [sourcePath, setSourcePath] = useState('data/benchmarks/routing_prompts.json');
   const [qualityFloor, setQualityFloor] = useState(0.9);
   const [maxPrompts, setMaxPrompts] = useState(8);
   const [jobId, setJobId] = useState<string | null>(null);

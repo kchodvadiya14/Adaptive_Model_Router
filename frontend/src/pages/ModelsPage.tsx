@@ -39,17 +39,17 @@ import {
 const emptyForm: ModelCreateRequest = {
   id: '',
   name: '',
-  provider: 'mock',
-  type: 'local',
+  provider: 'groq',
+  type: 'api',
   tier: 'small',
   input_cost_per_1m_tokens: 0,
   output_cost_per_1m_tokens: 0,
-  context_window: 32000,
+  context_window: 131072,
   capabilities: ['general'],
   supports_vision: false,
   supports_tools: false,
   enabled: true,
-  avg_latency_ms: 100,
+  avg_latency_ms: 1500,
   quality_score: 0.85,
 };
 

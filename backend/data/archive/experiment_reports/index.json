@@ -1,0 +1,9 @@
+{
+  "96cdb6aa-731b-4512-88a6-a0cac19791f5": {
+    "id": "96cdb6aa-731b-4512-88a6-a0cac19791f5",
+    "name": "good",
+    "experiment_type": "router_comparison",
+    "created_at": "2026-09-18T15:10:01.242994+00:00",
+    "dataset_path": "data/benchmarks/sample_prompts.json"
+  }
+}

@@ -134,11 +134,34 @@ def isolated_state(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest
     from app.training import registry as training_registry
 
     root = tmp_path_factory.mktemp("isolated_state")
+
+    # Pin settings a developer's .env commonly overrides, and blank every provider key so
+    # the suite stays offline and deterministic regardless of local configuration.
+    for name, value in {
+        "APP_ENV": "test",
+        "QUALITY_FLOOR": "0.90",
+        "FALLBACK_ON_QUALITY_BELOW": "0.85",
+        "JUDGE_PROVIDER": "mock",
+        "JUDGE_MODEL_ID": "gpt-4o-mini",
+        "EVALUATE_ON_CHAT": "true",
+        "OPENAI_API_KEY": "",
+        "ANTHROPIC_API_KEY": "",
+        "GOOGLE_API_KEY": "",
+        "GROQ_API_KEY": "",
+        "OPENAI_COMPATIBLE_API_KEY": "",
+        "OPENAI_COMPATIBLE_BASE_URL": "",
+    }.items():
+        monkeypatch.setenv(name, value)
     get_settings.cache_clear()
 
     use_isolated_database(root, monkeypatch)
 
-    # Registry: the built-in defaults, never the git-tracked or locally edited JSON file.
+    # Registry: the offline test seed (mock models + legacy entries), never the production
+    # defaults or the git-tracked / locally edited JSON file. Patching DEFAULT_MODELS also
+    # covers tests that build their own ModelRegistry.
+    from tests.model_fixtures import TEST_MODELS
+
+    monkeypatch.setattr("app.models.registry.DEFAULT_MODELS", TEST_MODELS)
     monkeypatch.setattr("app.models.registry._registry", ModelRegistry(registry_path=root / "model_registry.json"))
 
     # File outputs. The *_PATH constants are derived at import time, so patch them too.

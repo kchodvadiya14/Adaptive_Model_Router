@@ -30,6 +30,20 @@ def get_router_status() -> RouterStatusResponse:
         fallback_escalation=settings.fallback_escalation,
         enabled_models=len(enabled_models),
         total_models=len(all_models),
+        routing_threshold=settings.routing_threshold,
+        judge_provider=settings.judge_provider,
+        judge_model_id=settings.judge_model_id,
+        evaluate_on_chat=settings.evaluate_on_chat,
+        health_failure_threshold=settings.health_failure_threshold,
+        health_cooldown_seconds=settings.health_cooldown_seconds,
+        auth_enabled=bool(settings.router_api_key),
+        configured_providers={
+            "groq": bool(settings.groq_api_key),
+            "google": bool(settings.google_api_key),
+            "openai_compatible": bool(settings.openai_compatible_base_url and settings.openai_compatible_api_key),
+            "openai": bool(settings.openai_api_key),
+            "anthropic": bool(settings.anthropic_api_key),
+        },
     )
 
 

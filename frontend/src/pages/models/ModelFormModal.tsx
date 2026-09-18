@@ -16,6 +16,16 @@ interface ModelFormModalProps {
   onSubmit: (form: ModelCreateRequest) => void;
 }
 
+// Must match PROVIDER_CLASSES in backend/app/providers/factory.py.
+const PROVIDERS = [
+  { value: 'groq', label: 'Groq' },
+  { value: 'google', label: 'Google Gemini' },
+  { value: 'openai_compatible', label: 'OpenAI-compatible (OpenRouter)' },
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'anthropic', label: 'Anthropic' },
+  { value: 'mock', label: 'Mock (offline testing)' },
+];
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block">
@@ -59,7 +69,7 @@ export function ModelFormModal({
             <Input
               required
               disabled={!!editingId}
-              placeholder="gpt-4o-mini"
+              placeholder="openai/gpt-oss-20b"
               value={form.id}
               onChange={(e) => update('id', e.target.value)}
             />
@@ -73,12 +83,16 @@ export function ModelFormModal({
             />
           </Field>
           <Field label="Provider">
-            <Input
-              required
-              placeholder="openai"
-              value={form.provider}
-              onChange={(e) => update('provider', e.target.value)}
-            />
+            <Select value={form.provider} onChange={(e) => update('provider', e.target.value)}>
+              {!PROVIDERS.some((p) => p.value === form.provider) && (
+                <option value={form.provider}>{form.provider}</option>
+              )}
+              {PROVIDERS.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
+            </Select>
           </Field>
           <Field label="Deployment type">
             <Select value={form.type} onChange={(e) => update('type', e.target.value as ModelType)}>

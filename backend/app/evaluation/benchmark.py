@@ -11,6 +11,7 @@ from app.evaluation.metrics import compute_aggregate_metrics
 from app.models.registry import get_model_registry
 from app.providers.base import GenerationRequest
 from app.providers.factory import get_provider_for_model
+from app.providers.retry import BATCH_MAX_TOKENS, retry_transient
 from app.router.base import get_router
 from app.router.policy import estimate_prompt_cost
 from app.schemas.evaluation import BenchmarkPrompt, BenchmarkReport, BenchmarkStrategy, StrategyResult
@@ -119,17 +120,14 @@ class BenchmarkRunner:
         if not selected_model:
             raise ValueError(f"Selected model not found: {selected_model_id}")
 
+        request = GenerationRequest(messages=[{"role": "user", "content": item.prompt}], max_tokens=BATCH_MAX_TOKENS)
         provider = get_provider_for_model(selected_model)
-        generation = await provider.generate(
-            GenerationRequest(messages=[{"role": "user", "content": item.prompt}], max_tokens=512)
-        )
-        score = await judge.evaluate(item.prompt, generation.content)
+        generation = await retry_transient(lambda: provider.generate(request))
+        score = await retry_transient(lambda: judge.evaluate(item.prompt, generation.content))
 
         strong_provider = get_provider_for_model(strong_model)
-        strong_generation = await strong_provider.generate(
-            GenerationRequest(messages=[{"role": "user", "content": item.prompt}], max_tokens=512)
-        )
-        strong_score = await judge.evaluate(item.prompt, strong_generation.content)
+        strong_generation = await retry_transient(lambda: strong_provider.generate(request))
+        strong_score = await retry_transient(lambda: judge.evaluate(item.prompt, strong_generation.content))
 
         actual_cost = provider.estimate_cost(generation.input_tokens, generation.output_tokens).total_cost
         strong_baseline_cost = estimate_prompt_cost(strong_model, item.prompt, expected_output_tokens=generation.output_tokens)

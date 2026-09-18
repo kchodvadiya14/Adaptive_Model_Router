@@ -93,7 +93,7 @@ Frontier models cost 20–60× more than small models per token, but most real t
 
 ## Quick Start
 
-Runs end-to-end with **no API keys** — the registry ships with three zero-cost `mock-*` models covering all three tiers, so you can exercise routing, health/circuit behavior, benchmarking, dataset generation, and training completely offline.
+Needs free-tier API keys from Groq, Google AI Studio and (optionally) OpenRouter — see [Provider keys](#4-provider-keys). The test suite needs no keys and runs fully offline.
 
 ### Prerequisites
 
@@ -145,21 +145,32 @@ curl -X POST http://localhost:8000/api/chat \
   -d "{\"model\":\"auto\",\"messages\":[{\"role\":\"user\",\"content\":\"Summarise merge sort.\"}]}"
 ```
 
-### 4. Going live with real providers
+### 4. Provider keys
 
-1. Put your key in `backend/.env` (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GOOGLE_API_KEY`) — or point `OPENAI_COMPATIBLE_BASE_URL`/`OPENAI_COMPATIBLE_API_KEY` at a provider like OpenRouter or Google's Gemini OpenAI-compatible endpoint.
-2. Pin one model per tier so routing stops selecting the free mocks:
+The default registry runs entirely on **free-tier** models:
 
-   ```env
-   SMALL_MODEL_ID=gpt-4o-mini
-   MEDIUM_MODEL_ID=gpt-4o
-   STRONG_MODEL_ID=gpt-4-turbo
-   ```
+| Tier | Model | Provider | Paid list price (in / out per 1M tokens) |
+|---|---|---|---|
+| small | `openai/gpt-oss-20b` | Groq | $0.075 / $0.30 |
+| small (pinned use) | `nvidia/nemotron-3-super-120b-a12b:free` | OpenRouter | $0.08 / $0.45 |
+| medium | `openai/gpt-oss-120b` (also the quality judge) | Groq | $0.15 / $0.60 |
+| strong | `gemini-3.5-flash-lite` | Google | $0.30 / $2.50 |
+| strong (pinned use) | `gemini-3.5-flash` | Google | $1.50 / $9.00 |
 
-   Setting a tier override enables that model and disables every other model in the same tier. The **Models** console page does the same thing interactively, alongside its live health.
-3. Restart the backend.
+Costs are the providers' published paid prices (Sept 2026), so cost and "saved vs strong" figures show what the traffic would cost on a paid plan even though free-tier calls are billed $0. Put the keys in `backend/.env`:
 
-> Each tier resolves to the **cheapest enabled model** in it that passes capability, health, and any per-request constraints. Because the mock models cost $0, they win every tier until you override or disable them.
+```env
+GROQ_API_KEY=...
+GOOGLE_API_KEY=...
+OPENAI_COMPATIBLE_BASE_URL=https://openrouter.ai/api/v1
+OPENAI_COMPATIBLE_API_KEY=...
+JUDGE_PROVIDER=registry
+JUDGE_MODEL_ID=openai/gpt-oss-120b
+```
+
+Free-tier limits matter: Gemini 3.5 Flash allows about 20 requests/day and a free OpenRouter key about 50/day, which is why those two are secondary models used only when pinned. Batch jobs (dataset generation, benchmarks) retry rate-limited calls with backoff and skip a prompt only if it keeps failing.
+
+> Each tier resolves to the **cheapest enabled model** in it that passes capability, health, and any per-request constraints. The offline mock models exist only in the test suite's registry (`backend/tests/model_fixtures.py`).
 
 ---
 
@@ -198,7 +209,7 @@ All settings are environment variables read from `backend/.env`. Copy [backend/.
 
 | Variable | Description | Default |
 |---|---|---|
-| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` | Provider credentials | empty |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` / `GROQ_API_KEY` | Provider credentials | empty |
 | `OPENAI_COMPATIBLE_BASE_URL` / `OPENAI_COMPATIBLE_API_KEY` | Any OpenAI-shaped endpoint (vLLM, Ollama, OpenRouter, …) | empty |
 | `SMALL_MODEL_ID` / `MEDIUM_MODEL_ID` / `STRONG_MODEL_ID` | Pin one model per tier | empty |
 | `USE_MOCK_PROVIDERS` | Force offline mock responses | `false` |
@@ -209,8 +220,8 @@ All settings are environment variables read from `backend/.env`. Copy [backend/.
 
 | Variable | Description | Default |
 |---|---|---|
-| `JUDGE_PROVIDER` | `mock` (deterministic, free) or `openai` | `mock` |
-| `JUDGE_MODEL_ID` | Model used when the judge is `openai` | `gpt-4o-mini` |
+| `JUDGE_PROVIDER` | `mock` (heuristic, offline), `openai`, or `registry` (any registry model, through the gateway's own providers) | `mock` |
+| `JUDGE_MODEL_ID` | Judge model for `openai` or `registry` | `gpt-4o-mini` |
 | `EVALUATE_ON_CHAT` | Score every chat response inline | `true` |
 
 ### Server & Storage
@@ -258,7 +269,7 @@ curl -X POST http://localhost:8000/api/chat \
 # Chat pinned to a specific model, with a soft preference honored only if eligible
 curl -X POST http://localhost:8000/api/chat \
   -H "Content-Type: application/json" \
-  -d "{\"model\":\"auto\",\"preferred_model\":\"gpt-4o-mini\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}"
+  -d "{\"model\":\"auto\",\"preferred_model\":\"openai/gpt-oss-120b\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}"
 
 # Aggregate metrics, scoped usage, per-model circuit health, and historical performance
 curl http://localhost:8000/api/metrics
@@ -284,7 +295,7 @@ response = client.chat.completions.create(
 )
 
 print(response.choices[0].message.content)
-print(response.model)   # the model actually chosen, e.g. "gpt-4o-mini"
+print(response.model)   # the model actually chosen, e.g. "openai/gpt-oss-20b"
 ```
 
 **Optional headers**
@@ -479,7 +490,7 @@ Adaptive_Model_Router/
 │   │   │                   #   model health, model outcomes, benchmark reports)
 │   │   ├── evaluation/     # Judge, metrics, benchmarks, experiment reports
 │   │   ├── models/         # Model registry (tiers, cost, quality, capabilities)
-│   │   ├── providers/      # OpenAI · Anthropic · Google · compatible · mock
+│   │   ├── providers/      # OpenAI · Anthropic · Google · Groq · compatible · mock
 │   │   ├── router/         # features → task → difficulty → policy; capability,
 │   │   │                   #   health, and constraint eligibility; 4 routers
 │   │   ├── schemas/        # Pydantic request/response contracts
@@ -520,7 +531,7 @@ npm run lint
 npm run preview
 ```
 
-Backend tests are fully offline (mock providers, mock judge) and isolated: an autouse fixture gives every test a fresh temporary SQLite database and a default model registry, so tests never read or write the developer's real `backend/data/router.db`, and a session-scoped guard fails the run if anything ever does.
+Backend tests are fully offline (mock providers, mock judge) and isolated: an autouse fixture gives every test a fresh temporary SQLite database and the offline test registry (`tests/model_fixtures.py`), pins judge/quality settings and blanks every provider key, so tests never read or write the developer's real `backend/data/router.db`, and a session-scoped guard fails the run if anything ever does.
 
 **Adding a provider:** implement `BaseModelProvider` in [backend/app/providers/](backend/app/providers/), register it in [factory.py](backend/app/providers/factory.py), then add your models to the registry with the correct tier, cost, and capability metadata.
 
@@ -536,7 +547,7 @@ Backend tests are fully offline (mock providers, mock judge) and isolated: an au
 - **Both `.env.example` files are stale** — they don't list the health/deadline/request-metadata variables documented above. Use the [Configuration](#configuration) tables in this README as the source of truth.
 - **Working directory matters.** Run the backend from `backend/`; every data path is relative to it.
 - **Historical performance is reporting only.** `GET /api/performance/models` does not yet influence routing decisions.
-- **The judge is OpenAI-only when `JUDGE_PROVIDER=openai`** — it calls OpenAI's API directly rather than through the provider abstraction, so Anthropic/Google/compatible models can't act as judge yet.
+- **Free-tier rate limits** — Groq, Google and OpenRouter free tiers throttle bursts; large dataset or benchmark runs slow down on retries and may skip a prompt.
 - **A model whose one live health-check trial fails with a non-retryable error can stay stuck `HALF_OPEN`** rather than reopening — a known edge case in the circuit breaker, not covered by an automatic recovery path yet.
 - **No authentication on the native `/api/*` endpoints** — only `/v1/*` supports `ROUTER_API_KEY`.
 - **No rate limiting, and no per-tenant model preference beyond the per-request `preferred_model` field.**
@@ -562,7 +573,7 @@ Backend tests are fully offline (mock providers, mock judge) and isolated: an au
 | ✅ | OpenAI-compatible API |
 | ⬜ | Use historical performance to influence routing (contextual bandit or similar) |
 | ⬜ | Streaming responses |
-| ⬜ | Provider-agnostic judge |
+| ✅ | Provider-agnostic judge (`JUDGE_PROVIDER=registry`) |
 | ⬜ | PostgreSQL persistence, authentication, rate limiting |
 | ⬜ | Working Docker images |
 

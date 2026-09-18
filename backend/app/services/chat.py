@@ -112,7 +112,13 @@ class ChatService:
         if settings.judge_provider == "openai" and not settings.openai_api_key:
             return None
         judge = get_judge()
-        score = await judge.evaluate(prompt, response)
+        try:
+            score = await judge.evaluate(prompt, response)
+        except Exception as exc:
+            # A judge outage must not fail a request whose answer was already generated;
+            # an unscored response simply skips quality escalation.
+            logger.warning("Quality judge failed, returning response unscored: %s", exc)
+            return None
         return score.overall
 
     async def chat(self, request: ChatRequest) -> ChatResponse:

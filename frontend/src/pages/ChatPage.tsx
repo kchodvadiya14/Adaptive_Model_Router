@@ -6,6 +6,7 @@ import { Card } from '../components/Card';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Input } from '../components/Input';
+import { MarkdownContent } from '../components/MarkdownContent';
 import { PageHeader } from '../components/PageHeader';
 import { Select } from '../components/Select';
 import { evaluateResponse, fetchModelHealth, fetchModels, routePrompt, sendChat } from '../services/api';
@@ -444,7 +445,7 @@ export function ChatPage() {
                       <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-brand-300">
                         {turn.response.model_name || turn.response.model}
                       </p>
-                      <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink-primary">{turn.response.content}</p>
+                      <MarkdownContent content={turn.response.content} />
                     </div>
                   )}
                   {turn.error && (

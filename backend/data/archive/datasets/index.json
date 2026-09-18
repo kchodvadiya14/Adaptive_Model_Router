@@ -1,0 +1,35 @@
+[
+  {
+    "id": "34eb03cf-3c49-4cfe-8da1-69d89bba5f37",
+    "name": "routing_mixed_difficulty",
+    "created_at": "2026-09-18T16:20:24.628993+00:00",
+    "source_path": "data/benchmarks/routing_prompts.json",
+    "output_path": "data\\processed\\datasets\\34eb03cf-3c49-4cfe-8da1-69d89bba5f37.jsonl",
+    "quality_floor": 0.8,
+    "record_count": 2,
+    "judge_provider": "registry:gemini-3.5-flash-lite",
+    "description": "24 easy/medium/hard prompts answered by GPT-OSS 20B (Groq), Nemotron 120B (OpenRouter) and Gemini 3.5 Flash, scored by the Gemini Flash-Lite judge (22 prompt(s) skipped after provider errors: e2, e3, e4, e5, e7, e8, m1, m2, m3, m4, m5, m6, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10)"
+  },
+  {
+    "id": "4f828624-2f95-4947-a487-752a8234af13",
+    "name": "live_preference_dataset",
+    "created_at": "2026-09-18T15:57:31.398627+00:00",
+    "source_path": "data/benchmarks/sample_prompts.json",
+    "output_path": "data\\processed\\datasets\\4f828624-2f95-4947-a487-752a8234af13.jsonl",
+    "quality_floor": 0.8,
+    "record_count": 8,
+    "judge_provider": "registry",
+    "description": "Generated from real Groq, OpenRouter and Gemini responses, scored by the Gemini judge"
+  },
+  {
+    "id": "c6d5d0b7-9882-4362-b8bc-c403015efda2",
+    "name": "dataset_1787810994276",
+    "created_at": "2026-08-27T06:09:55.612385+00:00",
+    "source_path": "data/benchmarks/sample_prompts.json",
+    "output_path": "data\\processed\\datasets\\c6d5d0b7-9882-4362-b8bc-c403015efda2.jsonl",
+    "quality_floor": 0.9,
+    "record_count": 8,
+    "judge_provider": "mock",
+    "description": ""
+  }
+]

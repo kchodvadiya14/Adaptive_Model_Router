@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     use_mock_providers: bool = Field(default=False, alias="USE_MOCK_PROVIDERS")
     max_request_messages: int = Field(default=50, alias="MAX_REQUEST_MESSAGES")
 
-    judge_provider: Literal["mock", "openai"] = Field(default="mock", alias="JUDGE_PROVIDER")
+    judge_provider: Literal["mock", "openai", "registry"] = Field(default="mock", alias="JUDGE_PROVIDER")
     judge_model_id: str = Field(default="gpt-4o-mini", alias="JUDGE_MODEL_ID")
     evaluate_on_chat: bool = Field(default=True, alias="EVALUATE_ON_CHAT")
 

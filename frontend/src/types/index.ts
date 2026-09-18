@@ -316,6 +316,14 @@ export interface RouterStatusResponse {
   fallback_escalation: string;
   enabled_models: number;
   total_models: number;
+  routing_threshold: number;
+  judge_provider: string;
+  judge_model_id: string;
+  evaluate_on_chat: boolean;
+  health_failure_threshold: number;
+  health_cooldown_seconds: number;
+  auth_enabled: boolean;
+  configured_providers: Record<string, boolean>;
 }
 
 export interface ExperimentVariant {

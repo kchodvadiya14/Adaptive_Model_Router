@@ -1,0 +1,9 @@
+{
+  "193fe400-36be-485b-b3b2-baf7286144b6": {
+    "id": "193fe400-36be-485b-b3b2-baf7286144b6",
+    "name": "Rule-based router on live models",
+    "experiment_type": "router_comparison",
+    "created_at": "2026-09-18T16:39:09.850222+00:00",
+    "dataset_path": "data/benchmarks/routing_prompts.json"
+  }
+}

@@ -1,13 +1,13 @@
 [
   {
-    "id": "c6d5d0b7-9882-4362-b8bc-c403015efda2",
-    "name": "dataset_1787810994276",
-    "created_at": "2026-08-27T06:09:55.612385+00:00",
-    "source_path": "data/benchmarks/sample_prompts.json",
-    "output_path": "data\\processed\\datasets\\c6d5d0b7-9882-4362-b8bc-c403015efda2.jsonl",
-    "quality_floor": 0.9,
-    "record_count": 8,
-    "judge_provider": "mock",
-    "description": ""
+    "id": "6ec17f5d-1322-4afd-889c-6c5a96752342",
+    "name": "routing_mixed_difficulty",
+    "created_at": "2026-09-18T16:34:35.486603+00:00",
+    "source_path": "data/benchmarks/routing_prompts.json",
+    "output_path": "data\\processed\\datasets\\6ec17f5d-1322-4afd-889c-6c5a96752342.jsonl",
+    "quality_floor": 0.8,
+    "record_count": 23,
+    "judge_provider": "registry:openai/gpt-oss-120b",
+    "description": "24 easy/medium/hard prompts answered by GPT-OSS 20B, GPT-OSS 120B (Groq) and Gemini 3.5 Flash-Lite, scored by the GPT-OSS 120B judge (1 prompt(s) skipped after provider errors: h10)"
   }
 ]
