@@ -14,7 +14,9 @@
       "summarization",
       "extraction"
     ],
-    "enabled": true,
+    "supports_vision": false,
+    "supports_tools": false,
+    "enabled": false,
     "avg_latency_ms": 450.0,
     "quality_score": 0.82
   },
@@ -33,7 +35,9 @@
       "reasoning",
       "summarization"
     ],
-    "enabled": true,
+    "supports_vision": false,
+    "supports_tools": false,
+    "enabled": false,
     "avg_latency_ms": 900.0,
     "quality_score": 0.92
   },
@@ -52,7 +56,9 @@
       "reasoning",
       "creative_writing"
     ],
-    "enabled": true,
+    "supports_vision": false,
+    "supports_tools": false,
+    "enabled": false,
     "avg_latency_ms": 1400.0,
     "quality_score": 0.96
   },
@@ -71,6 +77,8 @@
       "extraction",
       "classification"
     ],
+    "supports_vision": false,
+    "supports_tools": false,
     "enabled": false,
     "avg_latency_ms": 400.0,
     "quality_score": 0.8
@@ -90,27 +98,11 @@
       "reasoning",
       "creative_writing"
     ],
+    "supports_vision": false,
+    "supports_tools": false,
     "enabled": false,
     "avg_latency_ms": 950.0,
     "quality_score": 0.94
-  },
-  {
-    "id": "gemini-1.5-flash",
-    "name": "Gemini 1.5 Flash",
-    "provider": "google",
-    "type": "api",
-    "tier": "small",
-    "input_cost_per_1m_tokens": 0.075,
-    "output_cost_per_1m_tokens": 0.3,
-    "context_window": 1000000,
-    "capabilities": [
-      "general",
-      "summarization",
-      "translation"
-    ],
-    "enabled": false,
-    "avg_latency_ms": 380.0,
-    "quality_score": 0.81
   },
   {
     "id": "mock-echo",
@@ -126,6 +118,8 @@
       "coding",
       "reasoning"
     ],
+    "supports_vision": false,
+    "supports_tools": false,
     "enabled": true,
     "avg_latency_ms": 50.0,
     "quality_score": 0.91
@@ -144,6 +138,8 @@
       "coding",
       "reasoning"
     ],
+    "supports_vision": false,
+    "supports_tools": false,
     "enabled": true,
     "avg_latency_ms": 75.0,
     "quality_score": 0.92
@@ -163,8 +159,90 @@
       "reasoning",
       "creative_writing"
     ],
+    "supports_vision": false,
+    "supports_tools": false,
     "enabled": true,
     "avg_latency_ms": 100.0,
     "quality_score": 0.96
+  },
+  {
+    "id": "llama-3.1-8b-instant",
+    "name": "Llama 3.1 8B Instant (Groq, Free)",
+    "provider": "groq",
+    "type": "api",
+    "tier": "small",
+    "input_cost_per_1m_tokens": 0.0,
+    "output_cost_per_1m_tokens": 0.0,
+    "context_window": 131072,
+    "capabilities": [
+      "general",
+      "coding",
+      "summarization"
+    ],
+    "supports_vision": false,
+    "supports_tools": true,
+    "enabled": false,
+    "avg_latency_ms": 250.0,
+    "quality_score": 0.8
+  },
+  {
+    "id": "openai/gpt-oss-20b",
+    "name": "GPT-OSS 20B (Groq, Free)",
+    "provider": "groq",
+    "type": "api",
+    "tier": "small",
+    "input_cost_per_1m_tokens": 0.0,
+    "output_cost_per_1m_tokens": 0.0,
+    "context_window": 131072,
+    "capabilities": [
+      "general",
+      "coding",
+      "summarization"
+    ],
+    "supports_vision": false,
+    "supports_tools": true,
+    "enabled": true,
+    "avg_latency_ms": 400.0,
+    "quality_score": 0.8
+  },
+  {
+    "id": "deepseek/deepseek-v4-flash-0731:free",
+    "name": "DeepSeek V4 Flash (OpenRouter, Free)",
+    "provider": "openai_compatible",
+    "type": "api",
+    "tier": "small",
+    "input_cost_per_1m_tokens": 0.0,
+    "output_cost_per_1m_tokens": 0.0,
+    "context_window": 131072,
+    "capabilities": [
+      "general",
+      "coding",
+      "summarization"
+    ],
+    "supports_vision": false,
+    "supports_tools": false,
+    "enabled": true,
+    "avg_latency_ms": 1200.0,
+    "quality_score": 0.8
+  },
+  {
+    "id": "gemini-3.5-flash-lite",
+    "name": "Gemini 3.5 Flash Lite (Free Tier)",
+    "provider": "google",
+    "type": "api",
+    "tier": "small",
+    "input_cost_per_1m_tokens": 0.0,
+    "output_cost_per_1m_tokens": 0.0,
+    "context_window": 1000000,
+    "capabilities": [
+      "general",
+      "summarization",
+      "translation"
+    ],
+    "supports_vision": false,
+    "supports_tools": false,
+    "enabled": true,
+    "avg_latency_ms": 380.0,
+    "quality_score": 0.81
   }
 ]

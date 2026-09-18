@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     google_api_key: str = Field(default="", alias="GOOGLE_API_KEY")
     openai_compatible_base_url: str = Field(default="", alias="OPENAI_COMPATIBLE_BASE_URL")
     openai_compatible_api_key: str = Field(default="", alias="OPENAI_COMPATIBLE_API_KEY")
+    groq_api_key: str = Field(default="", alias="GROQ_API_KEY")
 
     small_model_id: str = Field(default="", alias="SMALL_MODEL_ID")
     medium_model_id: str = Field(default="", alias="MEDIUM_MODEL_ID")

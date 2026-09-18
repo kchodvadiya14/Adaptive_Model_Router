@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.providers.anthropic import AnthropicProvider
 from app.providers.base import BaseModelProvider, ProviderError, ProviderErrorCode
 from app.providers.google import GoogleProvider
+from app.providers.groq import GroqProvider
 from app.providers.mock import MockProvider
 from app.providers.openai import OpenAIProvider
 from app.providers.openai_compatible import OpenAICompatibleProvider
@@ -15,6 +16,7 @@ PROVIDER_CLASSES: dict[str, type[BaseModelProvider]] = {
     "anthropic": AnthropicProvider,
     "google": GoogleProvider,
     "openai_compatible": OpenAICompatibleProvider,
+    "groq": GroqProvider,
     "mock": MockProvider,
 }
 

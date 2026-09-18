@@ -1,8 +1,8 @@
-# Adaptive Model Router
+# Adaptive AI Gateway
 
-Route every LLM query to the **cheapest model that still meets your quality bar** — automatically, with an explanation for every decision.
+Route every LLM request to the **cheapest model that still meets your quality bar** — automatically, with circuit breakers for failing providers, request deadlines, per-caller usage tracking, and an explanation for every decision.
 
-A self-hostable routing layer that analyses each prompt, estimates its difficulty, and picks a Small / Medium / Strong model tier accordingly. Ships with a FastAPI backend, a React dashboard, four interchangeable routers (one rule-based, three trained), an LLM-as-judge evaluation pipeline, and an OpenAI-compatible endpoint you can point any existing OpenAI SDK at.
+A self-hostable gateway that analyses each prompt, estimates its difficulty, and picks a Small / Medium / Strong model tier accordingly — while enforcing capability requirements (vision, tools, context window), skipping models whose circuit is currently open, respecting per-request cost/latency/timeout budgets, and recording every attempt as feedback for future routing decisions. Ships with a FastAPI backend, a React console, four interchangeable routers, an LLM-as-judge evaluation pipeline, and an OpenAI-compatible endpoint you can point any existing OpenAI SDK at.
 
 ---
 
@@ -12,11 +12,13 @@ A self-hostable routing layer that analyses each prompt, estimates its difficult
 - [How It Works](#how-it-works)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
-- [Usage](#usage)
+- [Using the Gateway](#using-the-gateway)
 - [Routers](#routers)
+- [Reliability & Gateway Features](#reliability--gateway-features)
 - [Training a Router](#training-a-router)
 - [Evaluation & Experiments](#evaluation--experiments)
 - [API Reference](#api-reference)
+- [Frontend Console](#frontend-console)
 - [Project Structure](#project-structure)
 - [Development](#development)
 - [Limitations](#limitations)
@@ -27,11 +29,9 @@ A self-hostable routing layer that analyses each prompt, estimates its difficult
 
 ## Why
 
-Frontier models cost 20–60× more than small models per token, but most real traffic doesn't need them. "Summarise this paragraph" and "prove this theorem" are not the same workload, yet a single hard-coded `model=` parameter treats them identically.
+Frontier models cost 20–60× more than small models per token, but most real traffic doesn't need them. Routing everything to the strongest model is expensive; routing everything to the cheapest sacrifices quality. This project takes the middle path: score each prompt, spend only what it actually requires, and stay useful when things go wrong — a model outage, a slow provider, a request that needs vision or tool-calling, a caller with a hard cost ceiling.
 
-Routing everything to the strongest model is expensive. Routing everything to the cheapest sacrifices quality. This project takes the middle path: score each prompt, then spend only what the prompt actually requires — and measure whether that decision was right.
-
-**Every routing decision is auditable.** A route returns the task type, the difficulty score, the per-tier cost/quality/latency estimates it compared, the tier it picked, and a human-readable reason.
+**Every decision is auditable.** A route returns the task type, difficulty score, per-tier cost/quality/latency estimates, which tiers were excluded and why (capability, health, or a cost/latency constraint), the tier it picked, and a human-readable reason.
 
 ---
 
@@ -39,54 +39,61 @@ Routing everything to the strongest model is expensive. Routing everything to th
 
 ```
                     ┌──────────────────────────────────────────┐
-   Prompt ────────► │  Feature Extraction                      │
-                    │  length · code · math · reasoning cues   │
-                    │  instruction count · question complexity │
-                    └───────────────────┬──────────────────────┘
+   Request ───────► │  Feature Extraction → Task Classification │
+                    │  → Difficulty Estimation (0.0–1.0)        │
+                    └───────────────────┬───────────────────────┘
                                         ▼
                     ┌──────────────────────────────────────────┐
-                    │  Task Classification  (13 task types)    │
-                    │  coding · debugging · mathematics · ...  │
-                    └───────────────────┬──────────────────────┘
-                                        ▼
-                    ┌──────────────────────────────────────────┐
-                    │  Difficulty Estimation  (0.0 – 1.0)      │
-                    └───────────────────┬──────────────────────┘
+                    │  Hard Eligibility Filters (in order)      │
+                    │  1. Capability  (vision / tools / context)│
+                    │  2. Health      (circuit breaker state)   │
+                    │  3. Constraints (max_cost / max_latency)  │
+                    │  A tier failing any of these is removed   │
+                    │  before cost/quality comparison — never   │
+                    │  merely penalized.                        │
+                    └───────────────────┬───────────────────────┘
                                         ▼
                     ┌──────────────────────────────────────────┐
                     │  Routing Policy                          │
-                    │  Per tier: expected quality, estimated   │
-                    │  cost, estimated latency.                │
-                    │  Pick cheapest tier >= QUALITY_FLOOR.    │
-                    └───────────────────┬──────────────────────┘
+                    │  Cheapest eligible tier ≥ QUALITY_FLOOR,  │
+                    │  or the caller's preferred_model if it    │
+                    │  passes every filter above.               │
+                    └───────────────────┬───────────────────────┘
                                         ▼
               SMALL ───────────── MEDIUM ───────────── STRONG
                 │                    │                    │
                 └────────────────────┴────────────────────┘
                                      ▼
                     ┌──────────────────────────────────────────┐
-                    │  Provider Adapter → Response             │
-                    │  OpenAI · Anthropic · Google · Mock      │
-                    └───────────────────┬──────────────────────┘
+                    │  Provider Adapter → Response              │
+                    │  OpenAI · Anthropic · Google · Mock       │
+                    │  bounded by the request's timeout_ms      │
+                    │  (one shared budget, not per-attempt)     │
+                    └───────────────────┬───────────────────────┘
                                         ▼
                     ┌──────────────────────────────────────────┐
-                    │  Judge + Fallback                        │
-                    │  score below floor, or retryable error   │
-                    │  → escalate a tier and retry             │
-                    └───────────────────┬──────────────────────┘
+                    │  Judge + Fallback + Health Recording      │
+                    │  retryable error → escalate a tier         │
+                    │  low quality → escalate a tier             │
+                    │  timeout → recorded, never a health failure│
+                    │  3 consecutive failures → circuit opens    │
+                    └───────────────────┬───────────────────────┘
                                         ▼
                     ┌──────────────────────────────────────────┐
-                    │  SQLite routing log → /api/metrics       │
+                    │  SQLite: routing log · model outcomes ·   │
+                    │  jobs · model health                      │
+                    │  → /api/metrics · /api/usage ·             │
+                    │    /api/performance/models                │
                     └──────────────────────────────────────────┘
 ```
 
-**Tiers, not models.** The router chooses a *tier*; the registry resolves that tier to the cheapest enabled model in it. Swapping providers is a registry edit, not a code change.
+**Tiers, not models.** The router chooses a *tier*; the registry resolves that tier to the cheapest enabled model in it that passes every eligibility filter. Swapping providers is a registry edit, not a code change.
 
 ---
 
 ## Quick Start
 
-Runs end-to-end with **no API keys** — the registry ships with three zero-cost `mock-*` models covering all three tiers, so you can exercise routing, benchmarking, dataset generation, and training completely offline.
+Runs end-to-end with **no API keys** — the registry ships with three zero-cost `mock-*` models covering all three tiers, so you can exercise routing, health/circuit behavior, benchmarking, dataset generation, and training completely offline.
 
 ### Prerequisites
 
@@ -103,12 +110,12 @@ python -m venv .venv
 source .venv/bin/activate       # macOS / Linux
 
 pip install -r requirements.txt
-cp ../.env.example .env         # note: .env belongs in backend/, not the repo root
+cp .env.example .env            # .env belongs in backend/, not the repo root
 
 uvicorn app.main:app --reload --port 8000
 ```
 
-> **Start the backend from `backend/`.** Config, database, datasets, trained artifacts, and reports all resolve relative to the working directory. Launching uvicorn elsewhere silently creates a second set of empty data directories.
+> **Start the backend from `backend/`.** Config, the SQLite database, the model registry, dataset/report/model-artifact directories all resolve relative to the working directory.
 
 API docs: <http://localhost:8000/docs> · Health: <http://localhost:8000/health>
 
@@ -120,7 +127,7 @@ npm install
 npm run dev
 ```
 
-Dashboard: <http://localhost:5173> (the dev server proxies `/api` and `/health` to port 8000)
+Console: <http://localhost:5173> (the dev server proxies `/api` and `/health` to port 8000; it does **not** proxy `/v1` — call the OpenAI-compatible endpoints on port 8000 directly)
 
 ### 3. First route
 
@@ -128,18 +135,6 @@ Dashboard: <http://localhost:5173> (the dev server proxies `/api` and `/health` 
 curl -X POST http://localhost:8000/api/route \
   -H "Content-Type: application/json" \
   -d "{\"prompt\":\"Write a Python function to detect a cycle in a linked list.\"}"
-```
-
-```jsonc
-{
-  "task_type": "coding",
-  "difficulty": 0.67,
-  "difficulty_label": "medium",
-  "selected_tier": "medium",
-  "selected_model": "...",
-  "reason": "...",
-  "tier_evaluations": [ /* cost, quality and latency per tier */ ]
-}
 ```
 
 Then send a real chat with `"model": "auto"`:
@@ -152,7 +147,7 @@ curl -X POST http://localhost:8000/api/chat \
 
 ### 4. Going live with real providers
 
-1. Put your key in `backend/.env` (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GOOGLE_API_KEY`).
+1. Put your key in `backend/.env` (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GOOGLE_API_KEY`) — or point `OPENAI_COMPATIBLE_BASE_URL`/`OPENAI_COMPATIBLE_API_KEY` at a provider like OpenRouter or Google's Gemini OpenAI-compatible endpoint.
 2. Pin one model per tier so routing stops selecting the free mocks:
 
    ```env
@@ -161,16 +156,16 @@ curl -X POST http://localhost:8000/api/chat \
    STRONG_MODEL_ID=gpt-4-turbo
    ```
 
-   Setting a tier override enables that model and disables every other model in the same tier. The **Models** page does the same thing interactively.
+   Setting a tier override enables that model and disables every other model in the same tier. The **Models** console page does the same thing interactively, alongside its live health.
 3. Restart the backend.
 
-> Each tier resolves to the **cheapest enabled model** in it. Because the mock models cost $0, they win every tier until you override or disable them.
+> Each tier resolves to the **cheapest enabled model** in it that passes capability, health, and any per-request constraints. Because the mock models cost $0, they win every tier until you override or disable them.
 
 ---
 
 ## Configuration
 
-All settings are environment variables read from `backend/.env`. Copy [.env.example](.env.example) as your starting point.
+All settings are environment variables read from `backend/.env`. Copy [backend/.env.example](backend/.env.example) as a starting point — note it currently only lists a subset of these; the full set below is authoritative (verified against `backend/app/config/settings.py`).
 
 ### Routing
 
@@ -186,20 +181,28 @@ All settings are environment variables read from `backend/.env`. Copy [.env.exam
 
 | Variable | Description | Default |
 |---|---|---|
-| `FALLBACK_ENABLED` | Escalate a tier on retryable failure | `true` |
+| `FALLBACK_ENABLED` | Escalate a tier on retryable failure or low quality | `true` |
 | `MAX_FALLBACK_ATTEMPTS` | Models tried per request (1–5) | `3` |
 | `FALLBACK_ON_QUALITY_BELOW` | Re-run at a higher tier if the judge scores below this | `0.85` |
 | `FALLBACK_ESCALATION` | `tier_up` (one step at a time) or `strong_only` | `tier_up` |
+
+### Health & Circuit Breaking
+
+| Variable | Description | Default |
+|---|---|---|
+| `HEALTH_FAILURE_THRESHOLD` | Consecutive retryable failures before a model's circuit opens | `3` |
+| `HEALTH_COOLDOWN_SECONDS` | Time an open circuit waits before allowing one half-open trial request | `30` |
+| `REQUEST_MIN_ATTEMPT_BUDGET_MS` | With `timeout_ms` set, don't start another generation/evaluation step with less than this much budget left | `10` |
 
 ### Models & Providers
 
 | Variable | Description | Default |
 |---|---|---|
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` | Provider credentials | empty |
-| `OPENAI_COMPATIBLE_BASE_URL` / `OPENAI_COMPATIBLE_API_KEY` | Any OpenAI-shaped endpoint (vLLM, Ollama, Together, …) | empty |
+| `OPENAI_COMPATIBLE_BASE_URL` / `OPENAI_COMPATIBLE_API_KEY` | Any OpenAI-shaped endpoint (vLLM, Ollama, OpenRouter, …) | empty |
 | `SMALL_MODEL_ID` / `MEDIUM_MODEL_ID` / `STRONG_MODEL_ID` | Pin one model per tier | empty |
 | `USE_MOCK_PROVIDERS` | Force offline mock responses | `false` |
-| `PROVIDER_TIMEOUT` | Per-request provider timeout, in seconds | `60` |
+| `PROVIDER_TIMEOUT` | Per-provider-call timeout, in seconds | `60` |
 | `MAX_REQUEST_MESSAGES` | Max messages accepted per chat request | `50` |
 
 ### Evaluation
@@ -216,28 +219,28 @@ All settings are environment variables read from `backend/.env`. Copy [.env.exam
 |---|---|---|
 | `BACKEND_HOST` / `BACKEND_PORT` | Bind address | `0.0.0.0` / `8000` |
 | `CORS_ORIGINS` | Comma-separated allowed origins | `http://localhost:5173,…` |
-| `DATABASE_URL` | Routing-log database | `sqlite:///./data/router.db` |
+| `DATABASE_URL` | SQLite database (routing logs, model outcomes, jobs, model health, benchmark reports) | `sqlite:///./data/router.db` |
 | `STORE_PROMPTS` | Persist raw prompt text in logs (off for privacy) | `false` |
 | `LOG_LEVEL` | Python log level | `INFO` |
 | `ROUTER_API_KEY` | When set, `/v1/*` requires `Authorization: Bearer <key>` | empty |
 
 ---
 
-## Usage
+## Using the Gateway
 
-### Dashboard
+### Console
 
 | Page | What it does |
 |---|---|
-| **Overview** | System metrics and quick navigation |
-| **Chat** | Send prompts, compare tiers side by side, inspect extracted features, override the quality floor per message |
-| **Analytics** | Cost reduction, quality retention, strong-model usage, fallback rate, per-tier and per-task breakdowns |
-| **Models** | Full registry CRUD — add, edit, enable/disable, inspect cost and quality metadata |
+| **Overview** | System status and quick navigation |
+| **Chat** | Send prompts, compare tiers, inspect extracted features, override the quality floor |
+| **Models** | Registry CRUD (create/edit/enable/disable) plus **live circuit health** and **historical performance** per model, clearly separated in the table and detail view |
+| **Analytics** | Cost reduction, quality retention, strong-model usage, fallback rate, per-tier/task breakdowns |
 | **Benchmark** | Run Always Strong / Always Cheap / Adaptive Router against a prompt set; browse past reports |
-| **Dataset** | Generate preference data, page through records, override labels by hand |
-| **Training** | Train a router, watch progress, compare trained models, activate one |
+| **Dataset** | Generate preference datasets, browse/search/filter records, review and override labels by hand |
+| **Training** | Train a router (TF-IDF / embedding / BERT), watch progress, compare runs over time, see accuracy/precision/recall/F1/confusion-matrix charts |
 | **Experiments** | Run the full evaluation suite and read generated reports |
-| **Settings** | Current routing and fallback configuration |
+| **Settings** | Current routing, fallback, and health configuration |
 
 ### Native API
 
@@ -247,18 +250,21 @@ curl -X POST http://localhost:8000/api/route \
   -H "Content-Type: application/json" \
   -d "{\"prompt\":\"Explain the CAP theorem\"}"
 
-# Chat with automatic routing
+# Chat with automatic routing, a caller identity, and a hard deadline
 curl -X POST http://localhost:8000/api/chat \
   -H "Content-Type: application/json" \
-  -d "{\"model\":\"auto\",\"messages\":[{\"role\":\"user\",\"content\":\"Explain the CAP theorem\"}]}"
+  -d "{\"model\":\"auto\",\"messages\":[{\"role\":\"user\",\"content\":\"Explain the CAP theorem\"}],\"user_id\":\"alice\",\"tags\":{\"app\":\"support-bot\"},\"max_cost\":0.01,\"timeout_ms\":15000}"
 
-# Chat pinned to a specific model
+# Chat pinned to a specific model, with a soft preference honored only if eligible
 curl -X POST http://localhost:8000/api/chat \
   -H "Content-Type: application/json" \
-  -d "{\"model\":\"gpt-4o-mini\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}"
+  -d "{\"model\":\"auto\",\"preferred_model\":\"gpt-4o-mini\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}"
 
-# Aggregate metrics across all logged requests
+# Aggregate metrics, scoped usage, per-model circuit health, and historical performance
 curl http://localhost:8000/api/metrics
+curl "http://localhost:8000/api/usage?user_id=alice"
+curl http://localhost:8000/api/health/models
+curl http://localhost:8000/api/performance/models
 ```
 
 ### OpenAI-Compatible API
@@ -273,30 +279,24 @@ client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
 response = client.chat.completions.create(
     model="auto",
     messages=[{"role": "user", "content": "Summarise merge sort."}],
+    user="alice",                       # recorded as user_id
+    metadata={"app": "support-bot"},    # recorded as usage tags
 )
 
 print(response.choices[0].message.content)
 print(response.model)   # the model actually chosen, e.g. "gpt-4o-mini"
 ```
 
-```bash
-curl -X POST http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d "{\"model\":\"auto\",\"messages\":[{\"role\":\"user\",\"content\":\"Explain binary search\"}]}"
-
-curl http://localhost:8000/v1/models   # includes the virtual "auto" model
-```
-
-Responses use the standard OpenAI shape (`choices`, `usage`, `object: "chat.completion"`) plus an optional `router` block carrying task type, tier, cost, and fallback metadata.
-
 **Optional headers**
 
 | Header | Effect |
 |---|---|
 | `X-Quality-Floor: 0.95` | Override the quality floor for this request only |
+| `X-Request-ID: <id>` | Correlation ID; echoed back on the response and in logs |
+| `X-Request-Timeout-Ms: 15000` | Overall wall-clock budget for the whole request |
 | `Authorization: Bearer <key>` | Required when `ROUTER_API_KEY` is set |
 
-> The Vite dev server proxies `/api` and `/health` but **not** `/v1` — call the OpenAI-compatible endpoints on port 8000 directly.
+Responses use the standard OpenAI shape plus an optional `router` block (task type, tier, cost, fallback info, request ID).
 
 ---
 
@@ -311,7 +311,41 @@ All four implement the same interface and are swapped with a single environment 
 | `embedding` | SentenceTransformer embeddings + classifier | Yes |
 | `bert` | BERT-style MLP head over embeddings | Yes |
 
-The ML routers predict **P(the strong model is meaningfully better)** and compare it against `ROUTING_THRESHOLD`. They load the most recent trained artifact from `backend/models/` at startup and raise a clear error if none exists — so train before switching `ROUTER_TYPE`.
+The ML routers predict **P(the strong model is meaningfully better)** and compare it against `ROUTING_THRESHOLD`. They load the most recently trained artifact of their type from `backend/models/` at startup.
+
+---
+
+## Reliability & Gateway Features
+
+Everything in this section is invisible when nothing is wrong — it only changes behavior when a request actually needs it.
+
+### Capability-aware routing
+
+Models declare `supports_vision` and `supports_tools` (alongside `context_window`, already present). A request with an image or a non-empty `tools` list, or one whose estimated token count exceeds a tier's context window, hard-excludes any model that can't handle it — before cost/quality comparison, not as a soft penalty.
+
+### Circuit breaking
+
+Each model has an independent circuit: `CLOSED` (healthy) → `OPEN` after `HEALTH_FAILURE_THRESHOLD` consecutive *retryable* provider failures → `HALF_OPEN` for exactly one trial request once `HEALTH_COOLDOWN_SECONDS` has elapsed → `CLOSED` on success or back to `OPEN` on failure. Non-retryable errors (bad request, auth/config issues) never count toward health. `GET /api/health/models` exposes live state, consecutive failures, and cooldown remaining for every registered model.
+
+### Request deadlines
+
+An optional `timeout_ms` is one shared budget across the *entire* request — initial generation, provider-error fallback, quality evaluation, and quality escalation all draw from the same clock, and a step that doesn't have enough budget left is never started. A deadline exhaustion is a distinct `RequestTimeoutError`, never counted as a provider health failure, and returns a structured 504 with the stage, model, and timing.
+
+### Cost & latency constraints, and a soft model preference
+
+`max_cost` and `max_latency_ms` are additional hard filters using the router's existing cost estimate and the registry's `avg_latency_ms` — no new estimation model. `preferred_model` is a *preference*, not a bypass: it's checked against the same capability/health/constraint filters as every other candidate, and if it fails one, routing proceeds normally and the response explains why the preference wasn't honored.
+
+### Request metadata & scoped usage
+
+`request_id` (auto-generated if omitted), `user_id`, `session_id`, and free-form `tags` travel with a request into the routing log. `GET /api/usage` reports total/successful/fallback request counts, total estimated cost, and average latency, with breakdowns by user, model, and tag, filterable by `user_id`, `session_id`, `model_id`, and `tag_key`/`tag_value`.
+
+### Historical model performance
+
+Every generation attempt the gateway makes — including fallback and escalation attempts — is recorded with its outcome: `success`, `quality_failure` (answered, but below the escalation threshold), `retryable_failure`, `non_retryable_failure`, or `timeout`. `GET /api/performance/models` aggregates these per model: request count, success rate, fallback rate, average latency/cost/quality, and an outcome breakdown, filterable by model, task type, and time window. This is reporting only — it does not yet feed back into routing decisions.
+
+### Persistent, restart-safe background jobs
+
+Dataset generation, training, benchmark, and experiment runs share one generic SQLite-backed job manager. A job's status survives a backend restart; one still `running` when the process exits is marked `failed` (never silently reported as completed) the next time its job type is used.
 
 ---
 
@@ -322,16 +356,12 @@ Training data is generated by the system itself: each prompt is answered at all 
 **1. Generate a preference dataset** (at least 4 labeled records are needed to train)
 
 ```bash
-# API
 curl -X POST http://localhost:8000/api/dataset/generate \
   -H "Content-Type: application/json" \
   -d "{\"source_path\":\"data/benchmarks/sample_prompts.json\",\"max_prompts\":8,\"quality_floor\":0.9}"
-
-# CLI, from backend/
-python -m training.generate_dataset --max-prompts 8
 ```
 
-Records land in `backend/data/processed/datasets/<uuid>.jsonl` with a manifest in `index.json`. Review and correct labels on the **Dataset** page — human overrides take precedence over judge labels.
+Review and correct labels on the **Dataset** console page — human overrides take precedence over judge labels.
 
 **2. Train**
 
@@ -341,7 +371,7 @@ curl -X POST http://localhost:8000/api/training/start \
   -d "{\"dataset_id\":\"<UUID>\",\"router_type\":\"tfidf\",\"routing_threshold\":0.6}"
 ```
 
-Poll `GET /api/training/status/{job_id}` for accuracy, F1, and the confusion matrix, or watch the **Training** page.
+Watch progress and see accuracy/precision/recall/F1 and the confusion matrix on the **Training** page, or poll `GET /api/training/status/{job_id}`.
 
 **3. Activate**
 
@@ -351,38 +381,17 @@ ROUTER_TYPE=tfidf
 
 Restart the backend, then confirm with `GET /api/router/status`.
 
-**Other CLI helpers** (run from `backend/`):
-
-```bash
-python -m training.prepare_dataset --dataset-id <UUID> --output data/processed/training_set.csv
-python -m training.evaluate_responses
-python -m training.train_tfidf_router
-```
+> Training metrics describe how well the model reproduces the judge's preference labels on a held-out split — they are not a claim that routed response quality improved. The **Training** page's "How training works" panel states this explicitly.
 
 ---
 
 ## Evaluation & Experiments
 
-### Judge
-
-An LLM-as-judge scores responses on a 0–1 scale. `JUDGE_PROVIDER=mock` gives deterministic, free scoring for development; `openai` uses a real model for meaningful numbers.
-
 ### Metrics
 
-`GET /api/metrics` aggregates every logged request:
-
-| Metric | Meaning |
-|---|---|
-| `cost_saved` | Spend avoided versus routing everything to the strong tier |
-| `quality_retention` | Achieved quality as a fraction of the strong-tier baseline |
-| `strong_model_usage` | Share of requests that reached the strong tier |
-| `fallback_rate` | Share of requests that escalated |
-| `average_cost` / `average_latency_ms` | Per-request averages |
-| `requests_by_model` / `_task` / `_tier` | Distribution breakdowns |
+`GET /api/metrics` aggregates every logged request: `cost_saved`, `quality_retention`, `strong_model_usage`, `fallback_rate`, average cost/latency, and distributions by model/task/tier.
 
 ### Benchmarks
-
-Compare strategies over one prompt set:
 
 ```bash
 curl -X POST http://localhost:8000/api/benchmark \
@@ -390,27 +399,17 @@ curl -X POST http://localhost:8000/api/benchmark \
   -d "{\"strategy\":\"adaptive_router\",\"max_prompts\":8}"
 ```
 
-Reports persist to `backend/experiments/benchmarks/`.
+Compares Always Strong / Always Cheap / Adaptive Router over one prompt set; reports persist to `backend/experiments/benchmarks/`.
 
 ### Full evaluation suite
 
 ```bash
-# API
 curl -X POST http://localhost:8000/api/experiments/run \
   -H "Content-Type: application/json" \
   -d "{\"experiment_type\":\"final_evaluation\",\"max_prompts\":8,\"quality_floor\":0.9}"
-
-# CLI, from backend/
-python experiments/run_final_evaluation.py --max-prompts 8
 ```
 
-Three sections, all measured at run time — nothing in the report is hard-coded:
-
-1. **Strategy comparison** — Always Strong vs. Always Cheap vs. Adaptive Router
-2. **Quality-floor ablation** — adaptive routing at floors 0.85 / 0.90 / 0.95
-3. **Router comparison** — rule-based vs. each trained router (untrained routers are skipped, not failed)
-
-Reports and their generated markdown summaries land in `backend/experiments/reports/`. Suite parameters live in [experiments/configs/final_evaluation.json](experiments/configs/final_evaluation.json).
+Three measured sections — strategy comparison, quality-floor ablation, router comparison — persisted with an auto-generated markdown summary to `backend/experiments/reports/`.
 
 ---
 
@@ -418,81 +417,52 @@ Reports and their generated markdown summaries land in `backend/experiments/repo
 
 Interactive docs at `/docs`; full OpenAPI schema at `/openapi.json`.
 
-### Health
-
 | Method | Endpoint | Description |
 |---|---|---|
 | GET | `/health` | Service status, version, environment |
-
-### Routing
-
-| Method | Endpoint | Description |
-|---|---|---|
-| POST | `/api/route` | Analyse a prompt and return the routing decision |
+| POST | `/api/route` | Analyse a prompt; supports `preferred_model`, `max_cost`, `max_latency_ms` |
 | GET | `/api/router/status` | Active router type and configuration |
-
-### Chat
-
-| Method | Endpoint | Description |
-|---|---|---|
-| POST | `/api/chat` | Chat completion; `model: "auto"` enables routing |
-
-### Models
-
-| Method | Endpoint | Description |
-|---|---|---|
+| POST | `/api/chat` | Chat completion; `model:"auto"`, request metadata, deadline, constraints |
 | GET | `/api/models` | List registered models |
-| GET | `/api/models/{model_id}` | Model detail |
+| GET | `/api/models/{id}` | Model detail |
 | POST | `/api/models` | Register a model |
-| PATCH | `/api/models/{model_id}` | Update model metadata |
-| POST | `/api/models/{model_id}/enable` | Enable a model |
-| POST | `/api/models/{model_id}/disable` | Disable a model |
-
-### Evaluation & Metrics
-
-| Method | Endpoint | Description |
-|---|---|---|
+| PATCH | `/api/models/{id}` | Update model metadata |
+| POST | `/api/models/{id}/enable` / `/disable` | Enable / disable |
+| GET | `/api/health/models` | Live circuit-breaker state per model |
+| GET | `/api/performance/models` | Historical per-model performance (filterable) |
+| GET | `/api/usage` | Scoped usage totals and breakdowns |
 | POST | `/api/evaluate` | Judge a prompt/response pair |
 | GET | `/api/metrics` | Aggregated routing metrics |
 | POST | `/api/benchmark` | Start a benchmark job |
 | GET | `/api/benchmark/status/{job_id}` | Benchmark job status |
-| GET | `/api/benchmarks` | List benchmark reports |
-| GET | `/api/benchmarks/{report_id}` | Benchmark report detail |
-
-### Dataset
-
-| Method | Endpoint | Description |
-|---|---|---|
+| GET | `/api/benchmarks` / `/api/benchmarks/{id}` | List / get benchmark reports |
 | POST | `/api/dataset/generate` | Start preference-dataset generation |
 | GET | `/api/dataset/generate/status/{job_id}` | Generation job status |
-| GET | `/api/dataset` | List datasets |
-| GET | `/api/dataset/{dataset_id}` | Paginated preference records |
-| POST | `/api/dataset/{dataset_id}/human-eval` | Override a label by hand |
-
-### Training
-
-| Method | Endpoint | Description |
-|---|---|---|
+| GET | `/api/dataset` / `/api/dataset/{id}` | List datasets / paginated records |
+| POST | `/api/dataset/{id}/human-eval` | Override a label by hand |
 | POST | `/api/training/start` | Train a router from a dataset |
 | GET | `/api/training/status/{job_id}` | Training job status and metrics |
 | GET | `/api/training/models` | List trained artifacts |
-
-### Experiments
-
-| Method | Endpoint | Description |
-|---|---|---|
 | POST | `/api/experiments/run` | Run the evaluation suite |
 | GET | `/api/experiments/status/{job_id}` | Experiment job status |
-| GET | `/api/experiments` | List experiment reports |
-| GET | `/api/experiments/{report_id}` | Experiment report detail |
-
-### OpenAI-Compatible
-
-| Method | Endpoint | Description |
-|---|---|---|
+| GET | `/api/experiments` / `/api/experiments/{id}` | List / get experiment reports |
 | POST | `/v1/chat/completions` | Drop-in OpenAI chat completions |
-| GET | `/v1/models` | List models, including the virtual `auto` |
-| GET | `/v1/models/{model_id}` | Model detail |
+| GET | `/v1/models` / `/v1/models/{id}` | List models, including virtual `auto` |
+
+---
+
+## Frontend Console
+
+| Layer | Technology |
+|---|---|
+| Framework | React 18, TypeScript, Vite 6 |
+| Styling | Tailwind CSS (custom design tokens: `surface`/`ink`/`line` scales, semantic `success`/`warning`/`danger`/`info` colors) |
+| Charts | Recharts |
+| Routing | React Router 7 |
+| HTTP | axios |
+| Icons | lucide-react |
+
+A small shared component library (`Card`, `Button`, `Badge`, `Modal`, `Table`, `Input`, `Select`, `EmptyState`, `ErrorBanner`, `JobProgressBar`, `PageHeader`, `StatCard`) backs every page for a consistent look, with loading skeletons and explicit empty/error states throughout. Each page's larger pieces (charts, modals, formatters) live colocated under `src/pages/<page>/` rather than in one large file.
 
 ---
 
@@ -505,42 +475,34 @@ Adaptive_Model_Router/
 │   │   ├── api/            # FastAPI route handlers, one module per resource
 │   │   ├── config/         # Pydantic settings loaded from .env
 │   │   ├── datasets/       # Preference-dataset generation and JSONL storage
-│   │   ├── db/             # SQLite engine and routing-log repository
+│   │   ├── db/             # SQLite connection + repositories (routing logs, jobs,
+│   │   │                   #   model health, model outcomes, benchmark reports)
 │   │   ├── evaluation/     # Judge, metrics, benchmarks, experiment reports
-│   │   ├── models/         # Model registry (tiers, cost, quality metadata)
+│   │   ├── models/         # Model registry (tiers, cost, quality, capabilities)
 │   │   ├── providers/      # OpenAI · Anthropic · Google · compatible · mock
-│   │   ├── router/         # Features → task → difficulty → policy; 4 routers
+│   │   ├── router/         # features → task → difficulty → policy; capability,
+│   │   │                   #   health, and constraint eligibility; 4 routers
 │   │   ├── schemas/        # Pydantic request/response contracts
-│   │   ├── services/       # Chat orchestration, fallback, background jobs
+│   │   ├── services/       # Chat orchestration, fallback + health + deadlines,
+│   │   │                   #   outcome recording, usage/performance, background jobs
 │   │   ├── training/       # Trainers, artifact registry, training service
 │   │   ├── utils/          # Cost, tokens, logging, OpenAI conversion
 │   │   └── main.py         # App factory and router wiring
 │   ├── data/               # Runtime state: registry, datasets, router.db
 │   ├── experiments/        # CLI runner and generated reports
 │   ├── models/             # Trained router artifacts (.joblib)
-│   ├── tests/              # 60 pytest tests
+│   ├── tests/              # 216 pytest tests, incl. per-test database/registry isolation
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
-│   │   ├── components/     # Shared UI: cards, charts, headers, banners
-│   │   ├── pages/          # One component per dashboard route
+│   │   ├── components/     # Shared design-system components
+│   │   ├── pages/          # One page per route, with colocated `pages/<name>/` helpers
 │   │   ├── services/api.ts # Typed axios client
-│   │   └── types/          # TypeScript mirrors of the backend schemas
+│   │   └── types/          # TypeScript mirrors of backend schemas
 │   └── package.json
 ├── data/ · models/ · experiments/   # Placeholder dirs for root-level runs
-├── .env.example            # Copy to backend/.env
-└── docker-compose.yml
+└── docker-compose.yml       # Not currently usable — see Limitations
 ```
-
-### Tech stack
-
-| Layer | Technology |
-|---|---|
-| Frontend | React 18, TypeScript, Vite 6, Tailwind, Recharts, React Router 7, axios |
-| Backend | Python 3.11+, FastAPI, Pydantic v2, Uvicorn, httpx |
-| Storage | SQLite (routing logs), JSON (model registry), JSONL (datasets) |
-| ML | scikit-learn, sentence-transformers, joblib, NumPy |
-| Testing | pytest, pytest-asyncio |
 
 ---
 
@@ -549,17 +511,18 @@ Adaptive_Model_Router/
 ```bash
 # Backend tests, from backend/
 pytest -v
-pytest tests/test_rule_router.py -v     # a single module
+pytest tests/test_model_health.py -v     # a single module
 
 # Frontend
+cd frontend
+npm run build     # tsc -b && vite build
 npm run lint
-npm run build
 npm run preview
 ```
 
-Tests use mock providers and the mock judge throughout — no API keys, no network, no cost.
+Backend tests are fully offline (mock providers, mock judge) and isolated: an autouse fixture gives every test a fresh temporary SQLite database and a default model registry, so tests never read or write the developer's real `backend/data/router.db`, and a session-scoped guard fails the run if anything ever does.
 
-**Adding a provider:** implement `BaseModelProvider` in [backend/app/providers/](backend/app/providers/), register it in [factory.py](backend/app/providers/factory.py), then add your models to the registry with the correct tier and cost metadata.
+**Adding a provider:** implement `BaseModelProvider` in [backend/app/providers/](backend/app/providers/), register it in [factory.py](backend/app/providers/factory.py), then add your models to the registry with the correct tier, cost, and capability metadata.
 
 **Adding a router:** subclass the base in [backend/app/router/](backend/app/router/), register it in [base.py](backend/app/router/base.py), and add its name to the `ROUTER_TYPE` literal in [settings.py](backend/app/config/settings.py).
 
@@ -569,10 +532,14 @@ Tests use mock providers and the mock judge throughout — no API keys, no netwo
 
 - **No streaming.** `stream=true` is not supported on `/v1/chat/completions`.
 - **Settings are read-only in the UI.** Change `backend/.env` and restart.
-- **Background jobs are in-memory.** Training, dataset, benchmark, and experiment jobs do not survive a restart.
-- **`docker-compose.yml` is not usable as-is** — it references `backend/Dockerfile` and `frontend/Dockerfile`, neither of which is in the repo. Use the local setup above.
+- **`docker-compose.yml` is not usable as-is** — it references `backend/Dockerfile` and `frontend/Dockerfile`, neither of which exists in the repo.
+- **Both `.env.example` files are stale** — they don't list the health/deadline/request-metadata variables documented above. Use the [Configuration](#configuration) tables in this README as the source of truth.
 - **Working directory matters.** Run the backend from `backend/`; every data path is relative to it.
-- **Pre-call quality is a heuristic.** Expected tier quality comes from registry metadata and a difficulty penalty, not from measuring that specific prompt. The judge measures actual quality *after* the call.
+- **Historical performance is reporting only.** `GET /api/performance/models` does not yet influence routing decisions.
+- **The judge is OpenAI-only when `JUDGE_PROVIDER=openai`** — it calls OpenAI's API directly rather than through the provider abstraction, so Anthropic/Google/compatible models can't act as judge yet.
+- **A model whose one live health-check trial fails with a non-retryable error can stay stuck `HALF_OPEN`** rather than reopening — a known edge case in the circuit breaker, not covered by an automatic recovery path yet.
+- **No authentication on the native `/api/*` endpoints** — only `/v1/*` supports `ROUTER_API_KEY`.
+- **No rate limiting, and no per-tenant model preference beyond the per-request `preferred_model` field.**
 
 ---
 
@@ -581,20 +548,23 @@ Tests use mock providers and the mock judge throughout — no API keys, no netwo
 | Status | Item |
 |---|---|
 | ✅ | Model registry, provider adapters, chat API |
-| ✅ | Rule-based router with explainable decisions |
-| ✅ | LLM-as-judge evaluation, metrics, benchmarking |
+| ✅ | Rule-based and trained (TF-IDF/embedding/BERT) routers |
+| ✅ | LLM-as-judge evaluation, metrics, benchmarking, final-evaluation suite |
 | ✅ | Preference-dataset pipeline with human override |
-| ✅ | Trained routers: TF-IDF, embedding, BERT |
-| ✅ | Quality- and error-driven fallback escalation |
-| ✅ | Full React dashboard |
+| ✅ | Provider-error and quality-based fallback escalation |
+| ✅ | Capability-aware routing (vision, tools, context window) |
+| ✅ | Per-model circuit breaking with health cooldown/recovery |
+| ✅ | End-to-end request deadlines, independent of routing-latency constraints |
+| ✅ | Request metadata, `preferred_model`, cost/latency constraints, scoped usage reporting |
+| ✅ | Historical per-model performance from recorded generation outcomes |
+| ✅ | Unified, restart-safe background job manager |
+| ✅ | Full React console: Overview, Chat, Models+Health, Analytics, Benchmark, Dataset, Training, Experiments, Settings |
 | ✅ | OpenAI-compatible API |
-| ✅ | Final evaluation suite |
+| ⬜ | Use historical performance to influence routing (contextual bandit or similar) |
 | ⬜ | Streaming responses |
-| ⬜ | Contextual-bandit routing (extension point prepared) |
-| ⬜ | PostgreSQL persistence |
-| ⬜ | Celery/RQ for durable background jobs |
+| ⬜ | Provider-agnostic judge |
+| ⬜ | PostgreSQL persistence, authentication, rate limiting |
 | ⬜ | Working Docker images |
-| ⬜ | Rate limiting |
 
 ---
 
