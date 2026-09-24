@@ -2,9 +2,10 @@
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.auth import verify_router_api_key
 from app.api.benchmark import benchmark_router, reports_router
 from app.api.dataset import router as dataset_router
 from app.api.chat import router as chat_router
@@ -50,20 +51,26 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    app.include_router(chat_router)
-    app.include_router(evaluation_router)
-    app.include_router(dataset_router)
-    app.include_router(benchmark_router)
-    app.include_router(reports_router)
-    app.include_router(metrics_router)
-    app.include_router(models_router)
-    app.include_router(training_router)
-    app.include_router(routing_router)
+    # Every native /api/* route requires the bearer key when ROUTER_API_KEY is set. The
+    # /v1 router declares the same dependency itself; /health stays open for probes.
+    protected = [Depends(verify_router_api_key)]
+    for api_router in (
+        chat_router,
+        evaluation_router,
+        dataset_router,
+        benchmark_router,
+        reports_router,
+        metrics_router,
+        models_router,
+        training_router,
+        routing_router,
+        experiments_router,
+        model_health_router,
+        usage_router,
+        performance_router,
+    ):
+        app.include_router(api_router, dependencies=protected)
     app.include_router(openai_compat_router)
-    app.include_router(experiments_router)
-    app.include_router(model_health_router)
-    app.include_router(usage_router)
-    app.include_router(performance_router)
 
     @app.get("/health", response_model=HealthResponse, tags=["health"])
     def health_check() -> HealthResponse:

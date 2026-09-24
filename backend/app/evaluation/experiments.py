@@ -35,8 +35,8 @@ def build_experiment_summary(sections: list[ExperimentSection]) -> tuple[str, st
     if not sections:
         return "No experiment sections completed.", "# Experiment Report\n\nNo sections completed."
 
-    lines = ["Final evaluation completed using mock-provider experiments."]
-    md_lines = ["# Final Evaluation Report", "", "Results from controlled mock-provider experiments.", ""]
+    lines = ["Final evaluation completed."]
+    md_lines = ["# Final Evaluation Report", "", "Results measured on the configured providers and judge.", ""]
 
     for section in sections:
         if not section.variants:

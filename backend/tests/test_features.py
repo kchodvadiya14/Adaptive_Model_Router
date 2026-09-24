@@ -17,3 +17,12 @@ def test_extract_features_detects_math():
 def test_extract_features_instruction_count():
     features = extract_features("1. Analyze the data\n2. Write code\n3. Summarize findings")
     assert features.instruction_count >= 2
+
+
+def test_keywords_match_whole_words_only():
+    assert "planning" not in extract_features("Which is the largest planet in our solar system?").task_type_scores
+
+
+def test_dates_are_not_mistaken_for_arithmetic():
+    assert not extract_features("The contract starts on 2026-01-15 and ends on 2027-01-14.").has_math
+    assert extract_features("What is 15% of 240?").has_math

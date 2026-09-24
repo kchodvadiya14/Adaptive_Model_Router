@@ -14,6 +14,7 @@ from app.router.capabilities import (
 )
 from app.router.constraints import RoutingConstraints, model_meets_constraints
 from app.router.difficulty import difficulty_label
+from app.router.feedback import blend_quality, measured_quality
 from app.router.health import is_routable
 from app.router.task_classifier import TASK_CAPABILITY_MAP, TaskType
 from app.schemas.models import ModelMetadata, ModelTier
@@ -35,6 +36,9 @@ class TierEvaluation:
     estimated_cost: float
     estimated_latency_ms: float
     meets_quality_floor: bool
+    # Judged outcomes (for this model and task type) that shaped expected_quality; 0 means
+    # it is still the registry's hand-set assumption.
+    quality_samples: int = 0
     # Hard capability eligibility (context window / vision / tools) — independent of
     # meets_quality_floor. A tier that fails this is never selectable, regardless of
     # cost or quality; see app/router/capabilities.py.
@@ -92,16 +96,32 @@ def _capability_boost(task_type: TaskType, model: ModelMetadata) -> float:
     return min(0.06, overlap * 0.03)
 
 
+def difficulty_penalty(tier: ModelTier, difficulty: float) -> float:
+    """How much a prompt's difficulty is assumed to cost a tier in quality."""
+    return difficulty * (0.18 if tier == ModelTier.SMALL else 0.10 if tier == ModelTier.MEDIUM else 0.05)
+
+
+def estimate_quality_with_evidence(
+    model: ModelMetadata,
+    task_type: TaskType,
+    difficulty: float,
+) -> tuple[float, int]:
+    """Expected quality and how many judged outcomes it rests on (0 = assumption only)."""
+    capability_adjustment = _capability_boost(task_type, model)
+    prior = model.quality_score + capability_adjustment - difficulty_penalty(model.tier, difficulty)
+    quality, samples = blend_quality(
+        prior, model.tier, difficulty, measured_quality(model.id, task_type.value)
+    )
+    return round(min(max(quality, 0.0), 1.0), 2), samples
+
+
 def estimate_quality_for_model(
     model: ModelMetadata,
     task_type: TaskType,
     difficulty: float,
 ) -> float:
     """Estimate expected response quality for a model on this task."""
-    capability_adjustment = _capability_boost(task_type, model)
-    difficulty_penalty = difficulty * (0.18 if model.tier == ModelTier.SMALL else 0.10 if model.tier == ModelTier.MEDIUM else 0.05)
-    quality = model.quality_score + capability_adjustment - difficulty_penalty
-    return round(min(max(quality, 0.0), 1.0), 2)
+    return estimate_quality_with_evidence(model, task_type, difficulty)[0]
 
 
 def estimate_prompt_cost(model: ModelMetadata, prompt: str, expected_output_tokens: int = 256) -> float:
@@ -125,7 +145,7 @@ def evaluate_model(
     # Read-only: previewing/selecting a model never claims a half-open trial slot —
     # only an actual generation attempt does that (app/services/fallback.py).
     health_eligible, health_reason = is_routable(model.id)
-    expected_quality = estimate_quality_for_model(model, task_type, difficulty)
+    expected_quality, quality_samples = estimate_quality_with_evidence(model, task_type, difficulty)
     estimated_cost = estimate_prompt_cost(model, prompt)
     constraint_eligible, constraint_reason = model_meets_constraints(model, estimated_cost, constraints)
     return TierEvaluation(
@@ -135,6 +155,7 @@ def evaluate_model(
         estimated_cost=estimated_cost,
         estimated_latency_ms=model.avg_latency_ms,
         meets_quality_floor=expected_quality >= policy.quality_floor,
+        quality_samples=quality_samples,
         capability_eligible=capability_eligible,
         capability_reason=capability_reason,
         health_eligible=health_eligible,
@@ -327,8 +348,13 @@ def build_explanation_bullets(
         if not item.model or not item.eligible:
             continue
         status = "meets floor" if item.meets_quality_floor else "below floor"
+        basis = (
+            f"measured on {item.quality_samples} judged {task_type.value.replace('_', ' ')} outcomes"
+            if item.quality_samples
+            else "assumed, no judged outcomes yet"
+        )
         bullets.append(
-            f"Expected {item.tier.value} model quality: {item.expected_quality:.2f} ({status})"
+            f"Expected {item.tier.value} model quality: {item.expected_quality:.2f} ({status}; {basis})"
         )
 
     preferred_honored = bool(

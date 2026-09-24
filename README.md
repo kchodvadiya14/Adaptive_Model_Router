@@ -233,7 +233,7 @@ All settings are environment variables read from `backend/.env`. Copy [backend/.
 | `DATABASE_URL` | SQLite database (routing logs, model outcomes, jobs, model health, benchmark reports) | `sqlite:///./data/router.db` |
 | `STORE_PROMPTS` | Persist raw prompt text in logs (off for privacy) | `false` |
 | `LOG_LEVEL` | Python log level | `INFO` |
-| `ROUTER_API_KEY` | When set, `/v1/*` requires `Authorization: Bearer <key>` | empty |
+| `ROUTER_API_KEY` | When set, `/api/*` and `/v1/*` require `Authorization: Bearer <key>` (`/health` stays open) | empty |
 
 ---
 
@@ -352,7 +352,9 @@ An optional `timeout_ms` is one shared budget across the *entire* request — in
 
 ### Historical model performance
 
-Every generation attempt the gateway makes — including fallback and escalation attempts — is recorded with its outcome: `success`, `quality_failure` (answered, but below the escalation threshold), `retryable_failure`, `non_retryable_failure`, or `timeout`. `GET /api/performance/models` aggregates these per model: request count, success rate, fallback rate, average latency/cost/quality, and an outcome breakdown, filterable by model, task type, and time window. This is reporting only — it does not yet feed back into routing decisions.
+Every generation attempt the gateway makes — including fallback and escalation attempts — is recorded with its outcome: `success`, `quality_failure` (answered, but below the escalation threshold), `retryable_failure`, `non_retryable_failure`, or `timeout`. `GET /api/performance/models` aggregates these per model: request count, success rate, fallback rate, average latency/cost/quality, and an outcome breakdown, filterable by model, task type, and time window. This is reporting only — it does not feed back into routing decisions on its own.
+
+**Calibrating quality scores.** The registry's `quality_score` per model is a hand-set prior. `GET /api/performance/calibration` previews what each score would become after blending it (Bayesian shrinkage, `prior_weight` pseudo-samples) with the judge scores recorded for that model, adjusted for the difficulty of the prompts it handled; `POST /api/performance/calibration/apply` writes them to the registry for models with at least `min_samples` judged outcomes (default 30). Because the router's expected quality is built from `quality_score`, this is how routing starts to reflect measured rather than assumed quality. Applying is not idempotent — re-applying over the same window double-counts it, so pass `since` on repeat runs. Production traffic is not a random sample (easy prompts go to small models), so a benchmark that runs every model on the same prompts (`data/benchmarks/routing_prompts_extended.json`, 48 labelled prompts) gives cleaner numbers.
 
 ### Persistent, restart-safe background jobs
 
@@ -441,6 +443,8 @@ Interactive docs at `/docs`; full OpenAPI schema at `/openapi.json`.
 | POST | `/api/models/{id}/enable` / `/disable` | Enable / disable |
 | GET | `/api/health/models` | Live circuit-breaker state per model |
 | GET | `/api/performance/models` | Historical per-model performance (filterable) |
+| GET | `/api/performance/calibration` | Preview quality scores calibrated against judged outcomes |
+| POST | `/api/performance/calibration/apply` | Write calibrated quality scores to the registry |
 | GET | `/api/usage` | Scoped usage totals and breakdowns |
 | POST | `/api/evaluate` | Judge a prompt/response pair |
 | GET | `/api/metrics` | Aggregated routing metrics |
@@ -512,7 +516,7 @@ Adaptive_Model_Router/
 │   │   └── types/          # TypeScript mirrors of backend schemas
 │   └── package.json
 ├── data/ · models/ · experiments/   # Placeholder dirs for root-level runs
-└── docker-compose.yml       # Not currently usable — see Limitations
+└── docker-compose.yml       # backend (8000) + nginx-served console (8080)
 ```
 
 ---
@@ -543,13 +547,16 @@ Backend tests are fully offline (mock providers, mock judge) and isolated: an au
 
 - **No streaming.** `stream=true` is not supported on `/v1/chat/completions`.
 - **Settings are read-only in the UI.** Change `backend/.env` and restart.
-- **`docker-compose.yml` is not usable as-is** — it references `backend/Dockerfile` and `frontend/Dockerfile`, neither of which exists in the repo.
+- **Docker images are untested.** `backend/Dockerfile`, `frontend/Dockerfile` and `docker-compose.yml` exist but have not been built end to end yet.
+- **Only the rule-based router works out of the box.** The `tfidf`, `embedding` and `bert` routers load a trained artifact from `backend/models/`, and none ships with the repo; selecting one before training raises `FileNotFoundError`. The embedding router additionally needs `pip install -r requirements-ml.txt`.
+- **Quality estimates are static.** Per-model `quality_score` values in the registry are hand-set, not measured, so the router's "expected quality" is an assumption until it is calibrated against judged outcomes.
+- **The committed experiment report is a 4-prompt smoke run**, not evidence of savings.
 - **Both `.env.example` files are stale** — they don't list the health/deadline/request-metadata variables documented above. Use the [Configuration](#configuration) tables in this README as the source of truth.
 - **Working directory matters.** Run the backend from `backend/`; every data path is relative to it.
-- **Historical performance is reporting only.** `GET /api/performance/models` does not yet influence routing decisions.
+- **Feedback only corrects quality, and only where there is evidence.** Once a model has 10+ judged outcomes for a task type, its expected quality for that task blends measurements with the registry prior (see `app/router/feedback.py`). Latency, cost and failure rates from `/api/performance/models` still don't influence routing, and a model that stops being chosen stops producing evidence (no exploration yet).
 - **Free-tier rate limits** — Groq, Google and OpenRouter free tiers throttle bursts; large dataset or benchmark runs slow down on retries and may skip a prompt.
 - **A model whose one live health-check trial fails with a non-retryable error can stay stuck `HALF_OPEN`** rather than reopening — a known edge case in the circuit breaker, not covered by an automatic recovery path yet.
-- **No authentication on the native `/api/*` endpoints** — only `/v1/*` supports `ROUTER_API_KEY`.
+- **Authentication is a single shared key.** Setting `ROUTER_API_KEY` protects both `/api/*` and `/v1/*` (`/health` stays open); there are no per-tenant keys yet. The console sends the key from `localStorage['router_api_key']` or the build-time `VITE_API_KEY`.
 - **No rate limiting, and no per-tenant model preference beyond the per-request `preferred_model` field.**
 
 ---
@@ -571,11 +578,12 @@ Backend tests are fully offline (mock providers, mock judge) and isolated: an au
 | ✅ | Unified, restart-safe background job manager |
 | ✅ | Full React console: Overview, Chat, Models+Health, Analytics, Benchmark, Dataset, Training, Experiments, Settings |
 | ✅ | OpenAI-compatible API |
-| ⬜ | Use historical performance to influence routing (contextual bandit or similar) |
+| 🟡 | Judged quality per (model, task type) corrects routing's expected quality; exploration / bandit still to do |
 | ⬜ | Streaming responses |
 | ✅ | Provider-agnostic judge (`JUDGE_PROVIDER=registry`) |
-| ⬜ | PostgreSQL persistence, authentication, rate limiting |
-| ⬜ | Working Docker images |
+| ✅ | Shared-key authentication on `/api/*` and `/v1/*` |
+| ⬜ | PostgreSQL persistence, per-tenant keys, rate limiting |
+| 🟡 | Docker images (written, not yet verified by a build) |
 
 ---
 

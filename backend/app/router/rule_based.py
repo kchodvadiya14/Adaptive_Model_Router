@@ -90,6 +90,7 @@ class RuleBasedRouter(Router):
                 expected_quality=item.expected_quality,
                 estimated_cost=item.estimated_cost,
                 meets_quality_floor=item.meets_quality_floor,
+                quality_samples=item.quality_samples,
             )
             for item in evaluations
             if item.model

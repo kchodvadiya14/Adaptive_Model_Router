@@ -132,6 +132,7 @@ export interface RoutingDecision {
     expected_quality: number;
     estimated_cost: number;
     meets_quality_floor: boolean;
+    quality_samples?: number;
   }>;
   features: Record<string, unknown>;
   preferred_model?: string | null;

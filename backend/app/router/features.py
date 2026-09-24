@@ -20,7 +20,10 @@ CODE_PATTERNS = [
 ]
 
 MATH_PATTERNS = [
-    r"\b\d+\s*[\+\-\*/\^=]\s*\d+",
+    # No bare "-": it would match dates (2026-01-15) and ranges. Subtraction needs spaces.
+    r"\b\d+\s*[\+\*/\^=]\s*\d+",
+    r"\b\d+\s+-\s+\d+",
+    r"\b\d+\s*%\s*of\b",
     r"\bintegral\b",
     r"\bderivative\b",
     r"\bequation\b",
@@ -53,7 +56,10 @@ OUTPUT_FORMAT_PATTERNS = {
 }
 
 TASK_KEYWORDS: dict[str, list[str]] = {
-    "coding": ["write code", "implement", "function", "algorithm", "python script", "javascript", "api endpoint"],
+    "coding": [
+        "write code", "implement", "function", "algorithm", "python", "javascript", "typescript",
+        "sql query", "regular expression", "regex", "asyncio", "api endpoint", "program",
+    ],
     "debugging": ["debug", "fix this", "error", "traceback", "not working", "bug in", "issue with code"],
     "mathematics": ["calculate", "equation", "integral", "derivative", "algebra", "probability", "theorem"],
     "reasoning": ["why", "explain why", "analyze", "compare and contrast", "evaluate", "pros and cons"],
@@ -119,7 +125,8 @@ def extract_features(prompt: str) -> PromptFeatures:
 
     task_scores: dict[str, float] = {}
     for task_type, keywords in TASK_KEYWORDS.items():
-        hits = sum(1 for kw in keywords if kw in lower)
+        # Whole words/phrases only: "plan" must not fire on "planet".
+        hits = sum(1 for kw in keywords if re.search(rf"\b{re.escape(kw)}\b", lower))
         if hits:
             task_scores[task_type] = min(1.0, hits / max(len(keywords) * 0.3, 1))
 

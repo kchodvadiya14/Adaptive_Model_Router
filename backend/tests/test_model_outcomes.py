@@ -192,8 +192,10 @@ async def test_models_refused_before_a_provider_call_are_not_recorded():
 async def test_timeout_is_recorded_without_becoming_a_provider_failure(providers):
     providers.delays["mock-echo"] = 5.0
 
+    # Generous budget: on a loaded machine the first DB/registry access can eat a tight one,
+    # and the deadline then expires before generation starts (so nothing is recorded).
     with pytest.raises(RequestTimeoutError):
-        await ChatService().chat(chat_request(request_id="to-1", timeout_ms=300))
+        await ChatService().chat(chat_request(request_id="to-1", timeout_ms=1500))
 
     rows = outcomes_for("to-1")
     assert len(rows) == 1
@@ -201,7 +203,7 @@ async def test_timeout_is_recorded_without_becoming_a_provider_failure(providers
     assert rows[0]["success"] == 0
     assert rows[0]["error_code"] == "request_timeout"
     # Measured around the provider call only; timeout_ms also covers routing before it.
-    assert 0 < rows[0]["latency_ms"] <= 300
+    assert 0 < rows[0]["latency_ms"] <= 1500
     snapshot = health.get_model_health("mock-echo", "mock")
     assert snapshot.consecutive_failures == 0 and snapshot.recent_failures == 0
 

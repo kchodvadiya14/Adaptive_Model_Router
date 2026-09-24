@@ -33,6 +33,20 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
+// When the backend sets ROUTER_API_KEY, every /api/* call needs a bearer token. A key saved in
+// localStorage (localStorage.setItem('router_api_key', '...')) wins over the build-time
+// VITE_API_KEY, which is baked into the bundle and so only suits private deployments.
+api.interceptors.request.use((config) => {
+  let key = import.meta.env.VITE_API_KEY || '';
+  try {
+    key = localStorage.getItem('router_api_key') || key;
+  } catch {
+    /* storage unavailable */
+  }
+  if (key) config.headers.set('Authorization', `Bearer ${key}`);
+  return config;
+});
+
 export async function fetchHealth(): Promise<HealthResponse> {
   const { data } = await api.get<HealthResponse>('/health');
   return data;

@@ -27,6 +27,20 @@ ALL_OUTCOMES = (
 )
 
 
+# Bumped on every write that can change quality statistics, so readers that cache
+# aggregates (app/router/feedback.py) know when to refresh.
+_write_version = 0
+
+
+def write_version() -> int:
+    return _write_version
+
+
+def _bump_write_version() -> None:
+    global _write_version
+    _write_version += 1
+
+
 def record_outcome(
     *,
     model_id: str,
@@ -77,6 +91,7 @@ def record_outcome(
             ),
         )
         conn.commit()
+        _bump_write_version()
         return int(cursor.lastrowid)
 
 
@@ -94,6 +109,7 @@ def set_quality(outcome_id: int, quality_score: float | None, *, quality_failure
             (quality_score, 1 if quality_failure else 0, outcome_id),
         )
         conn.commit()
+    _bump_write_version()
 
 
 def mark_fallback_used(outcome_id: int) -> None:
@@ -161,5 +177,50 @@ def aggregate_by_model(
             ORDER BY request_count DESC, model_id
             """,
             params,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def calibration_stats(*, since: datetime | None = None) -> list[dict[str, Any]]:
+    """Per-model judged-quality aggregates: only attempts that returned a response and were
+    scored, with the mean difficulty of the prompts they handled."""
+    clauses = ["success = 1", "quality_score IS NOT NULL"]
+    params: list[Any] = []
+    if since is not None:
+        clauses.append("recorded_at >= ?")
+        params.append(since.timestamp())
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT model_id,
+                   MAX(model_tier) AS model_tier,
+                   COUNT(*) AS scored_count,
+                   AVG(quality_score) AS mean_quality,
+                   AVG(COALESCE(difficulty, 0.0)) AS mean_difficulty
+            FROM model_outcomes
+            WHERE {' AND '.join(clauses)}
+            GROUP BY model_id
+            ORDER BY scored_count DESC, model_id
+            """,
+            params,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def task_quality_stats() -> list[dict[str, Any]]:
+    """Judged quality per (model, task type): what routing consults to learn which model
+    is actually good at which kind of prompt."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT model_id,
+                   task_type,
+                   COUNT(*) AS scored_count,
+                   AVG(quality_score) AS mean_quality,
+                   AVG(COALESCE(difficulty, 0.0)) AS mean_difficulty
+            FROM model_outcomes
+            WHERE success = 1 AND quality_score IS NOT NULL AND task_type IS NOT NULL
+            GROUP BY model_id, task_type
+            """
         ).fetchall()
     return [dict(row) for row in rows]

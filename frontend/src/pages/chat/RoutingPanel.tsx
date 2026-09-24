@@ -219,7 +219,9 @@ export function RoutingPanel({
                 <div className="mt-1 flex justify-between text-xs text-ink-muted">
                   <span>{tier.model_id ?? 'No model'}</span>
                   <span>
-                    {formatPercent(tier.expected_quality, 0)} · {formatCost(tier.estimated_cost)}
+                    {formatPercent(tier.expected_quality, 0)}
+                    {tier.quality_samples ? ` (measured, n=${tier.quality_samples})` : ' (assumed)'} ·{' '}
+                    {formatCost(tier.estimated_cost)}
                   </span>
                 </div>
               </div>

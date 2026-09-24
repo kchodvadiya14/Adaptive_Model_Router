@@ -15,6 +15,7 @@ class TierQualityEstimate(BaseModel):
     expected_quality: float
     estimated_cost: float
     meets_quality_floor: bool
+    quality_samples: int = 0  # judged outcomes behind expected_quality; 0 = hand-set assumption
 
 
 class RoutingDecision(BaseModel):

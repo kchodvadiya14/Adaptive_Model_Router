@@ -5,8 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from fastapi.responses import JSONResponse
 
+from app.api.auth import verify_router_api_key
 from app.api.errors import ERROR_STATUS_MAP
-from app.config.settings import Settings, get_settings
 from app.models.registry import get_model_registry
 from app.providers.base import ProviderError
 from app.router.capabilities import NoCapableModelError
@@ -27,26 +27,6 @@ from app.utils.openai_compat import (
 )
 
 router = APIRouter(prefix="/v1", tags=["openai-compatible"])
-
-
-def verify_router_api_key(
-    authorization: str | None = Header(default=None),
-    settings: Settings = Depends(get_settings),
-) -> None:
-    """Optional bearer-token auth when ROUTER_API_KEY is configured."""
-    if not settings.router_api_key:
-        return
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing or invalid Authorization header.",
-        )
-    token = authorization.removeprefix("Bearer ").strip()
-    if token != settings.router_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API key.",
-        )
 
 
 def _openai_error_response(
