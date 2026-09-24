@@ -39,6 +39,11 @@ def create_router(router_type: str, settings: Settings | None = None) -> Router:
 
         return BERTRouter(settings=settings)
 
+    if router_type == "learned":
+        from app.router.learned import LearnedRouter
+
+        return LearnedRouter(settings=settings)
+
     raise ValueError(f"Unsupported router type: {router_type}")
 
 

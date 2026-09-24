@@ -28,7 +28,7 @@ class Settings(BaseSettings):
         alias="CORS_ORIGINS",
     )
 
-    router_type: Literal["rule_based", "tfidf", "embedding", "bert"] = Field(
+    router_type: Literal["rule_based", "tfidf", "embedding", "bert", "learned"] = Field(
         default="rule_based",
         alias="ROUTER_TYPE",
     )
@@ -36,6 +36,45 @@ class Settings(BaseSettings):
     quality_floor: float = Field(default=0.90, alias="QUALITY_FLOOR")
     cost_priority: float = Field(default=0.7, alias="COST_PRIORITY")
     latency_priority: float = Field(default=0.3, alias="LATENCY_PRIORITY")
+
+    # Learned router (ROUTER_TYPE=learned): per-model quality predicted from similar past prompts.
+    embedding_model: str = Field(
+        default="sentence-transformers/all-MiniLM-L12-v2",
+        alias="EMBEDDING_MODEL",
+        description="Prompt encoder for the learned router. 'hashing' is a dependency-free offline fallback.",
+    )
+    collect_embeddings: bool = Field(
+        default=False,
+        alias="COLLECT_EMBEDDINGS",
+        description="Store each prompt's embedding (never its text) with judged outcomes so a learned router can be trained later. Always on when ROUTER_TYPE=learned.",
+    )
+    learned_k: int = Field(default=40, ge=1, alias="LEARNED_K")
+    learned_prior_weight: float = Field(
+        default=3.0, ge=0, alias="LEARNED_PRIOR_WEIGHT",
+        description="How many perfectly similar judged samples it takes to outweigh the registry prior.",
+    )
+    learned_min_similarity: float = Field(
+        default=0.5, ge=0, lt=1, alias="LEARNED_MIN_SIMILARITY",
+        description="Cosine similarity below which a past prompt carries no weight.",
+    )
+    learned_min_samples: int = Field(
+        default=50, ge=0, alias="LEARNED_MIN_SAMPLES",
+        description="Judged, embedded outcomes a deployment needs before the learned router replaces the static fallback.",
+    )
+    guard_window: int = Field(default=50, ge=1, alias="GUARD_WINDOW", description="Recent answers per task type the quality guard looks at.")
+    guard_min_samples: int = Field(default=20, ge=1, alias="GUARD_MIN_SAMPLES")
+    guard_tolerance: float = Field(
+        default=0.05, ge=0, alias="GUARD_TOLERANCE",
+        description="How far recent judged quality may fall below the floor before a task segment stops being cost-optimised.",
+    )
+    shadow_router_enabled: bool = Field(
+        default=False, alias="SHADOW_ROUTER_ENABLED",
+        description="Also compute what the learned router would have chosen for every request and log it, without acting on it.",
+    )
+    exploration_bonus: float = Field(
+        default=0.10, ge=0, alias="EXPLORATION_BONUS",
+        description="Optimism given to models with little evidence for a kind of prompt, so cheap models keep being tried.",
+    )
 
     fallback_enabled: bool = Field(default=True, alias="FALLBACK_ENABLED")
     max_fallback_attempts: int = Field(default=3, ge=1, le=5, alias="MAX_FALLBACK_ATTEMPTS")

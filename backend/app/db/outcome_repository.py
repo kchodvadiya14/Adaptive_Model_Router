@@ -57,6 +57,7 @@ def record_outcome(
     estimated_cost: float | None = None,
     quality_score: float | None = None,
     recorded_at: datetime | None = None,
+    embedding: bytes | None = None,
 ) -> int:
     if outcome not in ALL_OUTCOMES:
         raise ValueError(f"Unknown outcome '{outcome}'")
@@ -69,8 +70,8 @@ def record_outcome(
             INSERT INTO model_outcomes (
                 timestamp, recorded_at, request_id, model_id, provider, model_tier,
                 task_type, difficulty, stage, outcome, success, error_code,
-                latency_ms, estimated_cost, quality_score, fallback_used
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                latency_ms, estimated_cost, quality_score, fallback_used, embedding
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
             """,
             (
                 moment.astimezone(UTC).isoformat(),
@@ -88,6 +89,7 @@ def record_outcome(
                 latency_ms,
                 estimated_cost,
                 quality_score,
+                embedding,
             ),
         )
         conn.commit()
@@ -224,3 +226,38 @@ def task_quality_stats() -> list[dict[str, Any]]:
             """
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def embedding_samples() -> list[tuple[str, bytes, float]]:
+    """(model_id, embedding, judged quality) for every scored, successful attempt that kept an
+    embedding: the training data of the learned router."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT model_id, embedding, quality_score
+            FROM model_outcomes
+            WHERE success = 1 AND quality_score IS NOT NULL AND embedding IS NOT NULL
+            """
+        ).fetchall()
+    return [(row["model_id"], bytes(row["embedding"]), float(row["quality_score"])) for row in rows]
+
+
+def recent_quality_by_task(window: int) -> dict[str, tuple[float, int]]:
+    """Mean judged quality of the latest `window` scored answers per task type: what customers
+    actually received, whichever model produced it."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT task_type, AVG(quality_score) AS mean_quality, COUNT(*) AS n
+            FROM (
+                SELECT task_type, quality_score,
+                       ROW_NUMBER() OVER (PARTITION BY task_type ORDER BY id DESC) AS rn
+                FROM model_outcomes
+                WHERE success = 1 AND quality_score IS NOT NULL AND task_type IS NOT NULL
+            )
+            WHERE rn <= ?
+            GROUP BY task_type
+            """,
+            (window,),
+        ).fetchall()
+    return {row["task_type"]: (float(row["mean_quality"]), int(row["n"])) for row in rows}

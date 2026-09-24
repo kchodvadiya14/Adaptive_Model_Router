@@ -13,6 +13,7 @@ from app.api.evaluation import router as evaluation_router
 from app.api.metrics import router as metrics_router
 from app.api.models import router as models_router
 from app.api.routing import router as routing_router
+from app.api.shadow import router as shadow_router
 from app.api.experiments import router as experiments_router
 from app.api.model_health import router as model_health_router
 from app.api.openai_compat import router as openai_compat_router
@@ -68,6 +69,7 @@ def create_app() -> FastAPI:
         model_health_router,
         usage_router,
         performance_router,
+        shadow_router,
     ):
         app.include_router(api_router, dependencies=protected)
     app.include_router(openai_compat_router)

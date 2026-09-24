@@ -33,6 +33,33 @@ def get_models_performance(
     )
 
 
+@router.get("/segments")
+def get_segment_quality() -> dict:
+    """Recent judged quality per task type versus the quality floor: what the quality guard watches.
+    A degraded segment is no longer cost-optimised by the learned router."""
+    from app.config.settings import get_settings
+    from app.db import outcome_repository
+
+    settings = get_settings()
+    recent = outcome_repository.recent_quality_by_task(settings.guard_window)
+    segments = {}
+    for task, (mean, count) in sorted(recent.items()):
+        monitored = count >= settings.guard_min_samples
+        segments[task] = {
+            "recent_mean_quality": round(mean, 4),
+            "answers": count,
+            "monitored": monitored,
+            "degraded": bool(monitored and mean < settings.quality_floor - settings.guard_tolerance),
+        }
+    return {
+        "quality_floor": settings.quality_floor,
+        "tolerance": settings.guard_tolerance,
+        "window": settings.guard_window,
+        "min_samples": settings.guard_min_samples,
+        "segments": segments,
+    }
+
+
 def _calibration(min_samples: int, prior_weight: int, since: datetime | None, apply: bool) -> CalibrationReport:
     return calibrate(min_samples=min_samples, prior_weight=prior_weight, since=as_utc(since), apply=apply)
 

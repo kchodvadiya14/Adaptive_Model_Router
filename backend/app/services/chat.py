@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Any
@@ -12,7 +13,8 @@ from app.evaluation.judge import get_judge
 from app.models.registry import get_model_registry
 from app.providers.base import GenerationRequest, ProviderError, ProviderErrorCode
 from app.providers.factory import get_provider_for_model
-from app.router.base import get_router
+from app.router.base import Router, create_router, get_router
+from app.router.embedder import embed_prompt, to_bytes
 from app.router.capabilities import CapabilityExclusion, CapabilityRequirements, NoCapableModelError
 from app.router.constraints import RoutingConstraints, model_meets_constraints
 from app.router.policy import PreferredModelUnavailableError, estimate_prompt_cost
@@ -22,6 +24,7 @@ from app.schemas.routing import RouteRequest, RoutingDecision
 from app.services.deadline import STAGE_EVALUATION, RequestDeadline, run_within
 from app.services.fallback import FallbackExecutor, build_fallback_info
 from app.services.outcomes import OutcomeContext, OutcomeRecorder
+from app.services.shadow import record_shadow_decision
 from app.utils.tokens import estimate_messages_tokens
 
 logger = logging.getLogger(__name__)
@@ -62,8 +65,9 @@ class ChatService:
         requirements: CapabilityRequirements | None = None,
         constraints: RoutingConstraints | None = None,
         preferred_model: str | None = None,
+        router: Router | None = None,
     ) -> RoutingDecision:
-        router = get_router()
+        router = router or get_router()
         configuration: dict[str, Any] = {}
         if quality_floor is not None:
             configuration["quality_floor"] = quality_floor
@@ -104,6 +108,51 @@ class ChatService:
                 ],
                 constraints,
             )
+
+    def _record_shadow(
+        self,
+        *,
+        request: ChatRequest,
+        prompt: str,
+        request_id: str,
+        served_model: ModelMetadata,
+        served_routing: RoutingDecision | None,
+        cost: float,
+        quality: float | None,
+        output_tokens: int,
+        constraints: RoutingConstraints,
+    ) -> None:
+        """Log what the learned router would have chosen. Read-only with respect to the request:
+        no provider is called, and any failure here is swallowed."""
+        try:
+            shadow = self._route_prompt(
+                prompt,
+                quality_floor=request.quality_floor,
+                requirements=self._detect_capability_requirements(request),
+                constraints=constraints,
+                router=create_router("learned"),
+            )
+            shadow_model = get_model_registry().get_model(shadow.selected_model)
+            # Cost the shadow model would have incurred for the same amount of output.
+            shadow_cost = (
+                estimate_prompt_cost(shadow_model, prompt, expected_output_tokens=output_tokens)
+                if shadow_model
+                else shadow.estimated_cost
+            )
+            record_shadow_decision(
+                request_id=request_id,
+                task_type=shadow.task_type,
+                served_by="router" if served_routing else "pinned",
+                actual_model=served_model.id,
+                actual_cost=cost,
+                actual_quality=quality,
+                shadow_model=shadow.selected_model,
+                shadow_estimated_cost=shadow_cost,
+                shadow_estimated_quality=shadow.estimated_quality,
+                shadow_mode=str(shadow.features.get("mode") or shadow.features.get("router_type", "unknown")),
+            )
+        except Exception as exc:  # noqa: BLE001 - shadow mode must never affect the request
+            logger.warning("[request_id=%s] Shadow routing skipped: %s", request_id, exc)
 
     async def _evaluate_response_quality(self, prompt: str, response: str) -> float | None:
         settings = get_settings()
@@ -188,6 +237,15 @@ class ChatService:
             temperature=request.temperature,
         )
 
+        # The prompt embedding (never the text) is kept with each judged outcome so a learned router
+        # can be trained on this deployment's own traffic. Failure to embed only skips collection.
+        outcome_embedding: bytes | None = None
+        if settings.collect_embeddings or settings.router_type == "learned" or settings.shadow_router_enabled:
+            try:
+                outcome_embedding = to_bytes(await asyncio.to_thread(embed_prompt, prompt))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[request_id=%s] Could not embed prompt, skipping collection: %s", request_id, exc)
+
         fallback_executor = FallbackExecutor(settings=settings, registry=registry)
 
         # Quality-based escalation applies to both "auto" and a pinned model: whichever model
@@ -222,6 +280,7 @@ class ChatService:
                 request_id=request_id,
                 task_type=routing.task_type if routing else None,
                 difficulty=routing.difficulty if routing else None,
+                embedding=outcome_embedding,
             ),
         )
         model = fallback_result.model
@@ -285,6 +344,19 @@ class ChatService:
             )
         except Exception as exc:
             logger.warning("[request_id=%s] Failed to log routing event: %s", request_id, exc)
+
+        if settings.shadow_router_enabled:
+            self._record_shadow(
+                request=request,
+                prompt=prompt,
+                request_id=request_id,
+                served_model=model,
+                served_routing=routing,
+                cost=cost.total_cost,
+                quality=actual_quality,
+                output_tokens=generation.output_tokens,
+                constraints=constraints,
+            )
 
         return ChatResponse(
             content=generation.content,

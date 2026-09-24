@@ -74,6 +74,22 @@ CREATE INDEX IF NOT EXISTS idx_model_outcomes_model_time ON model_outcomes (mode
 CREATE INDEX IF NOT EXISTS idx_model_outcomes_task_time ON model_outcomes (task_type, recorded_at);
 CREATE INDEX IF NOT EXISTS idx_model_outcomes_request_id ON model_outcomes (request_id);
 
+CREATE TABLE IF NOT EXISTS shadow_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    request_id TEXT,
+    task_type TEXT,
+    served_by TEXT NOT NULL,
+    actual_model TEXT NOT NULL,
+    actual_cost REAL NOT NULL,
+    actual_quality REAL,
+    shadow_model TEXT NOT NULL,
+    shadow_estimated_cost REAL NOT NULL,
+    shadow_estimated_quality REAL NOT NULL,
+    shadow_mode TEXT NOT NULL,
+    agrees INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS model_health (
     model_id TEXT PRIMARY KEY,
     provider TEXT NOT NULL,
@@ -99,6 +115,7 @@ MIGRATIONS = [
     "ALTER TABLE routing_logs ADD COLUMN session_id TEXT",
     "ALTER TABLE routing_logs ADD COLUMN tags_json TEXT",
     "ALTER TABLE routing_logs ADD COLUMN preferred_model TEXT",
+    "ALTER TABLE model_outcomes ADD COLUMN embedding BLOB",
     "CREATE INDEX IF NOT EXISTS idx_routing_logs_user_id ON routing_logs (user_id)",
     "CREATE INDEX IF NOT EXISTS idx_routing_logs_session_id ON routing_logs (session_id)",
     "CREATE INDEX IF NOT EXISTS idx_routing_logs_request_id ON routing_logs (request_id)",

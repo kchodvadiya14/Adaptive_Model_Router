@@ -40,6 +40,7 @@ class OutcomeContext:
     request_id: str | None = None
     task_type: str | None = None
     difficulty: float | None = None
+    embedding: bytes | None = None  # float32 prompt embedding, when collection is on
 
 
 class OutcomeRecorder:
@@ -75,6 +76,7 @@ class OutcomeRecorder:
                 error_code=error_code,
                 latency_ms=latency_ms,
                 estimated_cost=estimated_cost,
+                embedding=self.context.embedding,
             )
             if stage != STAGE_GENERATION and previous is not None:
                 outcome_repository.mark_fallback_used(previous)
