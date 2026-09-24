@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.config.settings import get_settings
 from app.providers.anthropic import AnthropicProvider
 from app.providers.base import BaseModelProvider, ProviderError, ProviderErrorCode
 from app.providers.google import GoogleProvider
@@ -22,6 +23,10 @@ PROVIDER_CLASSES: dict[str, type[BaseModelProvider]] = {
 
 
 def get_provider_for_model(model: ModelMetadata) -> BaseModelProvider:
+    # USE_MOCK_PROVIDERS runs the complete gateway (registry, routing, pricing, judging) with no
+    # API keys and no network: every model is answered by the deterministic mock provider.
+    if get_settings().use_mock_providers:
+        return MockProvider(model)
     provider_class = PROVIDER_CLASSES.get(model.provider)
     if not provider_class:
         raise ProviderError(

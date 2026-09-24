@@ -1,0 +1,16 @@
+# Keyless demo: docker compose -f docker-compose.yml -f docker-compose.demo.yml up --build
+# Mock providers + mock judge + learned router + shadow mode; no API keys, no network calls.
+services:
+  backend:
+    environment:
+      USE_MOCK_PROVIDERS: "true"
+      JUDGE_PROVIDER: "mock"
+      EVALUATE_ON_CHAT: "true"
+      ROUTER_TYPE: "learned"
+      EMBEDDING_MODEL: "hashing"
+      LEARNED_MIN_SAMPLES: "20"
+      SHADOW_ROUTER_ENABLED: "true"
+      GROQ_API_KEY: ""
+      GOOGLE_API_KEY: ""
+      OPENAI_COMPATIBLE_API_KEY: ""
+      ROUTER_API_KEY: ""

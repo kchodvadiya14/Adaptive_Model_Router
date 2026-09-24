@@ -8,6 +8,14 @@ from app.providers.base import BaseModelProvider, GenerationRequest, GenerationR
 from app.utils.tokens import estimate_messages_tokens, estimate_tokens
 
 
+_ELABORATIONS = (
+    "First, the question is restated and its main constraints are identified.",
+    "Then the answer is worked through step by step, checking each intermediate result.",
+    "Finally, edge cases and common mistakes are noted, with a short summary of the conclusion.",
+)
+_DETAIL = {"small": 0, "medium": 1, "strong": 3}
+
+
 class MockProvider(BaseModelProvider):
     """Returns deterministic echo responses without external API calls."""
 
@@ -28,6 +36,10 @@ class MockProvider(BaseModelProvider):
             if last_user
             else f"[Mock {self.model.name}] Hello from the mock provider."
         )
+        # Stronger tiers give fuller answers, so a demo's judged quality differs by model the way it
+        # would with real ones. Purely simulated: it says nothing about real model quality.
+        for extra in _ELABORATIONS[: _DETAIL.get(self.model.tier.value, 0)]:
+            content += " " + extra
 
         input_tokens = estimate_messages_tokens(request.messages)
         output_tokens = estimate_tokens(content)

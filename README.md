@@ -100,6 +100,16 @@ Needs free-tier API keys from Groq, Google AI Studio and (optionally) OpenRouter
 - Python 3.11+
 - Node.js 18+
 
+### Fastest path: no keys, no network
+
+```bash
+python scripts/dev.py --demo          # API on :8000 + console on :5173, mock providers and judge
+python scripts/e2e_demo.py            # or: scripted end-to-end check of the whole flow (prints what it verified)
+docker compose -f docker-compose.yml -f docker-compose.demo.yml up --build   # or Docker: console on :8080
+```
+
+Demo mode answers with deterministic mock models (stronger tiers write fuller answers) and scores them with a heuristic judge, so it proves the pipeline works end to end. It says nothing about real model quality or real savings.
+
 ### 1. Backend
 
 ```bash
@@ -182,11 +192,23 @@ All settings are environment variables read from `backend/.env`. Copy [backend/.
 
 | Variable | Description | Default |
 |---|---|---|
-| `ROUTER_TYPE` | `rule_based` · `tfidf` · `embedding` · `bert` | `rule_based` |
+| `ROUTER_TYPE` | `rule_based` · `learned` · `tfidf` · `embedding` · `bert` | `rule_based` |
 | `QUALITY_FLOOR` | Minimum expected quality a tier must meet to be eligible | `0.90` |
 | `ROUTING_THRESHOLD` | ML routers: P(strong is better) above which the strong tier wins | `0.60` |
 | `COST_PRIORITY` | Weight on cost when breaking ties between eligible tiers | `0.7` |
 | `LATENCY_PRIORITY` | Weight on latency when breaking ties | `0.3` |
+
+### Learned routing, quality guard and shadow mode
+
+| Variable | Description | Default |
+|---|---|---|
+| `EMBEDDING_MODEL` | Prompt encoder (`sentence-transformers/all-MiniLM-L12-v2`; `hashing` is a dependency-free, much cruder fallback) | MiniLM-L12 |
+| `COLLECT_EMBEDDINGS` | Keep each prompt's embedding (never its text) with judged outcomes; always on for `learned` | `false` |
+| `LEARNED_MIN_SAMPLES` | Judged, embedded outcomes needed before `learned` replaces the static fallback | `50` |
+| `LEARNED_K` / `LEARNED_PRIOR_WEIGHT` / `LEARNED_MIN_SIMILARITY` | Neighbours used, prior strength, similarity cut-off | `40` / `3.0` / `0.5` |
+| `EXPLORATION_BONUS` | Optimism for models with little evidence on a kind of prompt | `0.10` |
+| `GUARD_WINDOW` / `GUARD_MIN_SAMPLES` / `GUARD_TOLERANCE` | Quality guard: recent answers per task type, minimum to act, allowed shortfall below the floor | `50` / `20` / `0.05` |
+| `SHADOW_ROUTER_ENABLED` | Log what the learned router would choose for every request without acting on it | `false` |
 
 ### Fallback
 
@@ -212,7 +234,7 @@ All settings are environment variables read from `backend/.env`. Copy [backend/.
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` / `GROQ_API_KEY` | Provider credentials | empty |
 | `OPENAI_COMPATIBLE_BASE_URL` / `OPENAI_COMPATIBLE_API_KEY` | Any OpenAI-shaped endpoint (vLLM, Ollama, OpenRouter, …) | empty |
 | `SMALL_MODEL_ID` / `MEDIUM_MODEL_ID` / `STRONG_MODEL_ID` | Pin one model per tier | empty |
-| `USE_MOCK_PROVIDERS` | Force offline mock responses | `false` |
+| `USE_MOCK_PROVIDERS` | Answer every model with the deterministic mock provider (no keys, no network) | `false` |
 | `PROVIDER_TIMEOUT` | Per-provider-call timeout, in seconds | `60` |
 | `MAX_REQUEST_MESSAGES` | Max messages accepted per chat request | `50` |
 
@@ -312,6 +334,19 @@ Responses use the standard OpenAI shape plus an optional `router` block (task ty
 ---
 
 ## Routers
+
+There are four ways a request can be routed. They are different things and the difference matters for what you can claim:
+
+- **Fallback routing** (`rule_based`): keyword features, a difficulty guess and hand-set quality scores, choosing between the small/medium/strong tier. Explainable and needs no data, but on the offline evaluation it was statistically no better than randomly mixing models. Treat it as the safe default, not the product.
+- **Learned routing** (`learned`): for the incoming prompt, finds the most similar past prompts each model answered, reads the judge's scores for them, and estimates each model's quality *for that kind of prompt*, smoothed toward the registry's hand-set score. It scores **every enabled model** (not one per tier) after the hard capability/health/constraint filters and picks the cheapest one expected to meet the quality floor. With no similar history it keeps the prior. Below `LEARNED_MIN_SAMPLES`, or if the encoder fails, it routes with the fallback and says so in the decision.
+- **Customer calibration**: the learned router trains only on *this deployment's* judged traffic (embeddings stored in its own database), so each customer or deployment calibrates to its own workload. This is required, not optional: on the offline evaluation a router trained without a data source got 0% saving on that source. `POST /api/performance/calibration/apply` additionally recalibrates the registry's quality scores from judged outcomes.
+- **Shadow mode** (`SHADOW_ROUTER_ENABLED=true`): the request is served exactly as before (a pinned model or the configured router). Afterwards the learned router's would-be choice and its estimated cost are logged; `GET /api/shadow/summary` reports agreement and estimated cost change. No extra provider call is made. The shadow model's quality is predicted, never measured, so shadow mode is a screening step before a live canary and must not be quoted as savings.
+
+A **quality guard** watches judged quality per task type (`GET /api/performance/segments`). If the answers customers recently received for a task type fall more than `GUARD_TOLERANCE` below the quality floor, that segment stops being cost-optimised and uses the best-estimated model until quality recovers.
+
+Evaluation limits: the routers were compared offline on SPROUT (a benchmark mixture with 2024-era models); see [docs/EVALUATION.md](docs/EVALUATION.md). The learned router beat random mixing by a small, statistically clear margin, generalised poorly to unseen data sources, and captured little of the oracle headroom. That result is not evidence about your models or your traffic; re-measure with replay, shadow mode and a live canary.
+
+The trainable ML routers below implement the same interface and are swapped with a single environment variable.
 
 All four implement the same interface and are swapped with a single environment variable.
 
@@ -547,8 +582,8 @@ Backend tests are fully offline (mock providers, mock judge) and isolated: an au
 
 - **No streaming.** `stream=true` is not supported on `/v1/chat/completions`.
 - **Settings are read-only in the UI.** Change `backend/.env` and restart.
-- **Docker images are untested.** `backend/Dockerfile`, `frontend/Dockerfile` and `docker-compose.yml` exist but have not been built end to end yet.
-- **Only the rule-based router works out of the box.** The `tfidf`, `embedding` and `bert` routers load a trained artifact from `backend/models/`, and none ships with the repo; selecting one before training raises `FileNotFoundError`. The embedding router additionally needs `pip install -r requirements-ml.txt`.
+- **Docker is verified only in demo mode.** The images build, the backend passes its health check, and a chat routed through the nginx-proxied console works with `docker-compose.demo.yml` (mock providers). It has not been run against live providers or in a real deployment.
+- **Only the rule-based router works with no data.** (`learned` also starts on day one, but routes with the rule-based fallback until it has judged traffic.) The `tfidf`, `embedding` and `bert` routers load a trained artifact from `backend/models/`, and none ships with the repo; selecting one before training raises `FileNotFoundError`. The embedding router additionally needs `pip install -r requirements-ml.txt`.
 - **Quality estimates are static.** Per-model `quality_score` values in the registry are hand-set, not measured, so the router's "expected quality" is an assumption until it is calibrated against judged outcomes.
 - **The committed experiment report is a 4-prompt smoke run**, not evidence of savings.
 - **Both `.env.example` files are stale** — they don't list the health/deadline/request-metadata variables documented above. Use the [Configuration](#configuration) tables in this README as the source of truth.
@@ -583,7 +618,8 @@ Backend tests are fully offline (mock providers, mock judge) and isolated: an au
 | ✅ | Provider-agnostic judge (`JUDGE_PROVIDER=registry`) |
 | ✅ | Shared-key authentication on `/api/*` and `/v1/*` |
 | ⬜ | PostgreSQL persistence, per-tenant keys, rate limiting |
-| 🟡 | Docker images (written, not yet verified by a build) |
+| ✅ | Docker images build and run (verified in keyless demo mode) |
+| ✅ | Learned router (all-model candidates, cold-start fallback), quality guard, shadow mode |
 
 ---
 
