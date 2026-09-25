@@ -206,4 +206,4 @@ docker-compose.yml, docker-compose.demo.yml
 
 ## License
 
-Academic project.
+[MIT](LICENSE). The SPROUT dataset used by the offline evaluation is downloaded at run time and is not part of this repository; it states no license of its own, so check its terms before using it beyond evaluation.
