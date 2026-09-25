@@ -1,0 +1,38 @@
+sequenceDiagram
+  autonumber
+  participant C as Client
+  participant A as API layer
+  participant S as ChatService
+  participant R as Router
+  participant F as FallbackExecutor
+  participant P as Provider
+  participant J as Judge
+  participant D as SQLite
+
+  C->>A: POST /v1/chat/completions (model=auto)
+  A->>A: verify API key
+  A->>S: chat(request)
+  S->>S: start deadline, detect vision/tools/context needs
+  S->>R: route(prompt, floor, constraints)
+  R->>D: read judged history + segment quality
+  R->>R: embed prompt, hard filters, score every model
+  R-->>S: chosen model + explanation
+  S->>F: execute(model)
+  F->>P: generate()
+  alt provider error or timeout
+    P-->>F: error
+    F->>F: record failure, open circuit after 3, try next tier
+    F->>P: generate() on fallback model
+  end
+  P-->>F: answer
+  F->>J: score answer
+  alt score below escalation threshold
+    F->>P: escalate one tier and re-judge
+  end
+  F->>D: outcome row (model, task, cost, quality, embedding)
+  S->>D: routing log row
+  opt shadow mode on
+    S->>R: what would the learned router pick?
+    S->>D: shadow decision (no provider call)
+  end
+  S-->>C: answer + cost + routing explanation

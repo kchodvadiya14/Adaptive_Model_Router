@@ -1,0 +1,36 @@
+flowchart TB
+  subgraph Clients
+    direction LR
+    SDK["OpenAI SDK / HTTP client"]
+    UI["React console"]
+  end
+
+  API["API layer<br/>/v1/chat/completions, /api/chat, /api/route<br/>API-key check"]
+  CHAT["ChatService<br/>request id, shared deadline,<br/>vision / tools / context needs"]
+
+  subgraph Routing["Routing (chooses a model, explains why)"]
+    direction LR
+    FILT["Hard filters<br/>capability, circuit health,<br/>cost and latency limits"]
+    LEARN["Learned router<br/>quality per model from<br/>similar judged prompts"]
+    STATIC["Fallback router<br/>static rules"]
+    GUARD["Quality guard<br/>per task type"]
+    FILT --> LEARN
+    GUARD --> LEARN
+    LEARN -. "cold start / failure" .-> STATIC
+  end
+
+  EXEC["FallbackExecutor<br/>retry, escalate a tier, circuit breaker"]
+
+  subgraph Providers["Provider adapters"]
+    direction LR
+    P1["Groq"] ~~~ P2["Google"] ~~~ P3["OpenAI /<br/>Anthropic"] ~~~ P4["OpenAI-<br/>compatible"] ~~~ P5["Mock<br/>(offline)"]
+  end
+
+  JUDGE["Judge<br/>scores every answer 0-1"]
+  SHADOW["Shadow logger<br/>records the would-be choice,<br/>makes no provider call"]
+  DB[("SQLite<br/>routing log, outcomes + prompt embeddings,<br/>model health, shadow decisions")]
+
+  Clients --> API --> CHAT --> Routing --> EXEC --> Providers
+  Providers --> JUDGE --> DB
+  CHAT -.-> SHADOW -.-> DB
+  DB == "judged history" ==> Routing

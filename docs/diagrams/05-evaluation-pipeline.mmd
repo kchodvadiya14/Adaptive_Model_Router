@@ -1,0 +1,11 @@
+flowchart LR
+  D["SPROUT dataset<br/>44k prompts, 13 models, judge scores"] --> X["Compact table<br/>scores, tokens, prices"]
+  D --> E["Embeddings<br/>MiniLM-L12"]
+  X --> S["Split<br/>train / validation / test<br/>(leaked prompts dropped)"]
+  E --> S
+  S --> R["Routers<br/>kNN, MLP, static rules"]
+  S --> B["Baselines<br/>each single model, best single,<br/>random mix, oracle"]
+  R --> M["Metrics<br/>cost-quality curve, AIQ,<br/>uplift over random mixing"]
+  B --> M
+  M --> CI["Bootstrap 95% intervals<br/>+ leave-one-source-out"]
+  CI --> REP["Report and chart"]

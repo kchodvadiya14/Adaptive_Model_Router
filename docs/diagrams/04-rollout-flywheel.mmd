@@ -1,0 +1,10 @@
+flowchart LR
+  T["Live traffic<br/>served by current model or router"] --> J["Judge scores answers"]
+  J --> O[("Outcomes + prompt embeddings<br/>(never prompt text)")]
+  O --> L["Learned router<br/>trained on this deployment only"]
+  L --> S["Shadow mode<br/>log would-be choices, serve nothing"]
+  S --> R["Review agreement, estimated cost change,<br/>per-task quality"]
+  R --> C["Canary<br/>small share of traffic, quality guard on"]
+  C --> P["Production routing"]
+  P --> T
+  Q["Quality guard<br/>stops cost-cutting for a task type<br/>whose quality drops"] -.-> P

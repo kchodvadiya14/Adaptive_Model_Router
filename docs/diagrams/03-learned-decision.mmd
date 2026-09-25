@@ -1,0 +1,14 @@
+flowchart TD
+  A["Incoming prompt"] --> B{"Enough judged, embedded outcomes<br/>in this deployment? (default 50)"}
+  B -- "no, or encoder failed" --> Z["Fallback router (static rules)<br/>the decision says why"]
+  B -- yes --> C["Embed the prompt, then apply hard filters<br/>to every enabled model"]
+  C --> D["For each eligible model, estimate quality<br/>from its most similar judged prompts<br/>(smoothed toward the registry prior)"]
+  D --> E["Add an exploration bonus that fades<br/>as evidence for this kind of prompt grows"]
+  E --> H{"Task type's recent quality below<br/>floor minus tolerance?"}
+  H -- yes --> I["Guarded: use the model with<br/>the highest estimated quality"]
+  H -- no --> J{"Any model expected to<br/>meet the quality floor?"}
+  J -- yes --> K["Choose the cheapest such model<br/>(ties: lower latency)"]
+  J -- no --> L["Best available:<br/>highest estimated quality"]
+  I --> M["Decision + evidence + explanation"]
+  K --> M
+  L --> M
