@@ -1,628 +1,209 @@
 # Adaptive AI Gateway
 
-Route every LLM request to the **cheapest model that still meets your quality bar** — automatically, with circuit breakers for failing providers, request deadlines, per-caller usage tracking, and an explanation for every decision.
+Send every LLM request to the **cheapest model that is still good enough**, and be able to show why.
 
-A self-hostable gateway that analyses each prompt, estimates its difficulty, and picks a Small / Medium / Strong model tier accordingly — while enforcing capability requirements (vision, tools, context window), skipping models whose circuit is currently open, respecting per-request cost/latency/timeout budgets, and recording every attempt as feedback for future routing decisions. Ships with a FastAPI backend, a React console, four interchangeable routers, an LLM-as-judge evaluation pipeline, and an OpenAI-compatible endpoint you can point any existing OpenAI SDK at.
+The gateway sits between your application and your model providers. It answers OpenAI-style requests, chooses a model for each one, calls it, scores the answer with a judge, and records what happened. Those records train a router that learns which models actually do well on *your* kind of prompts. Reliability features (circuit breakers, fallback, one shared deadline) keep a failing provider from taking your application down, and a shadow mode lets a new routing policy be observed before it is allowed to change anything.
 
----
+> **Status:** the gateway, the learned router, shadow mode, the quality guard and the offline evaluation are built and tested (281 offline tests). The routing results are **offline, on a public benchmark**, and are modest; the learned router has not been run on live traffic. See [What has been measured](#what-has-been-measured) before drawing conclusions.
 
-## Table of Contents
+## Contents
 
-- [Why](#why)
-- [How It Works](#how-it-works)
-- [Quick Start](#quick-start)
-- [Configuration](#configuration)
-- [Using the Gateway](#using-the-gateway)
-- [Routers](#routers)
-- [Reliability & Gateway Features](#reliability--gateway-features)
-- [Training a Router](#training-a-router)
-- [Evaluation & Experiments](#evaluation--experiments)
-- [API Reference](#api-reference)
-- [Frontend Console](#frontend-console)
-- [Project Structure](#project-structure)
-- [Development](#development)
-- [Limitations](#limitations)
-- [Roadmap](#roadmap)
-- [License](#license)
-
----
+[Why](#why) · [Architecture](#architecture) · [How a request is routed](#how-a-request-is-routed) · [How it compares](#how-it-compares-with-other-routers) · [What has been measured](#what-has-been-measured) · [Quick start](#quick-start) · [Using it](#using-it) · [Project structure](#project-structure) · [Documentation](#documentation) · [Limitations](#limitations) · [Roadmap](#roadmap)
 
 ## Why
 
-Frontier models cost 20–60× more than small models per token, but most real traffic doesn't need them. Routing everything to the strongest model is expensive; routing everything to the cheapest sacrifices quality. This project takes the middle path: score each prompt, spend only what it actually requires, and stay useful when things go wrong — a model outage, a slow provider, a request that needs vision or tool-calling, a caller with a hard cost ceiling.
+Frontier models cost 20 to 60 times more per token than small ones, yet much real traffic does not need them. Sending everything to the strongest model is expensive; sending everything to the cheapest costs quality. The middle path is to predict, per request, whether a cheaper model will be good enough, and to stay useful when things go wrong: a provider outage, a slow model, a request that needs vision or tool calling, a caller with a hard cost ceiling.
 
-**Every decision is auditable.** A route returns the task type, difficulty score, per-tier cost/quality/latency estimates, which tiers were excluded and why (capability, health, or a cost/latency constraint), the tier it picked, and a human-readable reason.
+Two things make that hard, and they shape this design:
 
----
+- **Predicting quality is the hard part.** Hand-written rules ("long prompt, so use the big model") turned out to be no better than choosing at random when measured (see below). The router has to learn from outcomes.
+- **A router that saves money by quietly hurting quality is worse than none.** So every answer is judged, every decision is explained, quality is watched per task type, and a new policy can be shadowed before it acts.
 
-## How It Works
+## Architecture
 
-```
-                    ┌──────────────────────────────────────────┐
-   Request ───────► │  Feature Extraction → Task Classification │
-                    │  → Difficulty Estimation (0.0–1.0)        │
-                    └───────────────────┬───────────────────────┘
-                                        ▼
-                    ┌──────────────────────────────────────────┐
-                    │  Hard Eligibility Filters (in order)      │
-                    │  1. Capability  (vision / tools / context)│
-                    │  2. Health      (circuit breaker state)   │
-                    │  3. Constraints (max_cost / max_latency)  │
-                    │  A tier failing any of these is removed   │
-                    │  before cost/quality comparison — never   │
-                    │  merely penalized.                        │
-                    └───────────────────┬───────────────────────┘
-                                        ▼
-                    ┌──────────────────────────────────────────┐
-                    │  Routing Policy                          │
-                    │  Cheapest eligible tier ≥ QUALITY_FLOOR,  │
-                    │  or the caller's preferred_model if it    │
-                    │  passes every filter above.               │
-                    └───────────────────┬───────────────────────┘
-                                        ▼
-              SMALL ───────────── MEDIUM ───────────── STRONG
-                │                    │                    │
-                └────────────────────┴────────────────────┘
-                                     ▼
-                    ┌──────────────────────────────────────────┐
-                    │  Provider Adapter → Response              │
-                    │  OpenAI · Anthropic · Google · Mock       │
-                    │  bounded by the request's timeout_ms      │
-                    │  (one shared budget, not per-attempt)     │
-                    └───────────────────┬───────────────────────┘
-                                        ▼
-                    ┌──────────────────────────────────────────┐
-                    │  Judge + Fallback + Health Recording      │
-                    │  retryable error → escalate a tier         │
-                    │  low quality → escalate a tier             │
-                    │  timeout → recorded, never a health failure│
-                    │  3 consecutive failures → circuit opens    │
-                    └───────────────────┬───────────────────────┘
-                                        ▼
-                    ┌──────────────────────────────────────────┐
-                    │  SQLite: routing log · model outcomes ·   │
-                    │  jobs · model health                      │
-                    │  → /api/metrics · /api/usage ·             │
-                    │    /api/performance/models                │
-                    └──────────────────────────────────────────┘
-```
+![System architecture](docs/img/01-architecture.png)
 
-**Tiers, not models.** The router chooses a *tier*; the registry resolves that tier to the cheapest enabled model in it that passes every eligibility filter. Swapping providers is a registry edit, not a code change.
+| Piece | Role |
+|---|---|
+| **API layer** | OpenAI-compatible (`/v1/chat/completions`) and native (`/api/*`) endpoints, protected by one bearer key when configured |
+| **ChatService** | Runs one request: id, shared deadline, hard requirements (vision, tools, context), routing, execution, judging, logging |
+| **Routing** | Hard filters (capability, circuit health, cost/latency limits), then the *learned router*, or the *static fallback router* while there is not enough data |
+| **FallbackExecutor** | Calls the chosen model, retries on provider errors, escalates a tier on a low judge score, maintains circuit breakers |
+| **Provider adapters** | Groq, Google, OpenAI, Anthropic, any OpenAI-compatible endpoint, plus an offline mock |
+| **Judge** | Scores each answer 0 to 1; the scores are the training signal |
+| **SQLite** | Routing log, per-attempt outcomes with prompt *embeddings* (never text by default), model health, shadow decisions |
+| **Console** | React UI for chat, model health, analytics, benchmarks, datasets, training, experiments |
 
----
+The full walk-through, including the request sequence diagram, is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## Quick Start
+## How a request is routed
 
-Needs free-tier API keys from Groq, Google AI Studio and (optionally) OpenRouter — see [Provider keys](#4-provider-keys). The test suite needs no keys and runs fully offline.
+1. **Hard filters.** A model that lacks a needed capability, has an open circuit, or would break the request's cost or latency limit is removed. It is never merely penalised, so a cheap model that cannot see images cannot win for being cheap.
+2. **Learned router** (`ROUTER_TYPE=learned`). Embed the prompt. For each remaining model, find the most similar prompts it has already answered *in this deployment*, read the judge's scores, and estimate that model's quality for this kind of prompt, smoothed toward a prior so thin evidence cannot swing a decision. Add a small exploration bonus that fades as evidence grows. Choose the **cheapest model expected to meet the quality floor**. It considers every enabled model, not three fixed tiers.
+3. **Fallback router** (`rule_based`). Keyword features, a difficulty guess and hand-set quality scores. Used automatically until the deployment has enough judged traffic (default 50 outcomes) and whenever the learned router fails; the decision says so.
+4. **Quality guard.** If recent judged quality for a task type falls below the floor, that task type stops being cost-optimised until it recovers.
+5. **Shadow mode.** Log what the learned router *would* have chosen for every request, without acting on it or calling any provider, so agreement and estimated cost change can be reviewed before any traffic moves.
 
-### Prerequisites
+![Learned-router decision flow](docs/img/03-learned-decision.png)
 
-- Python 3.11+
-- Node.js 18+
+The formulas, a worked example and the limits of each part are in [docs/HOW_ROUTING_WORKS.md](docs/HOW_ROUTING_WORKS.md).
 
-### Fastest path: no keys, no network
+**Rollout path this is built for:** shadow → small canary with the quality guard on → production, each step judged on measured quality.
+
+## How it compares with other routers
+
+Azure, AWS, Google, Databricks, OpenRouter and open-source projects such as RouteLLM and LiteLLM all route between models. Summary of their published designs (details, sources and dates in [docs/COMPARISON.md](docs/COMPARISON.md)):
+
+| | Routes between | Decision | Adapts to your traffic? |
+|---|---|---|---|
+| Azure AI Foundry model router | Multi-vendor pool | Trained model; Balanced / Cost / Quality modes | Not described in docs |
+| AWS Bedrock prompt routing | Two models of one family | Predicts per-prompt quality | No (docs say it cannot use application-specific data) |
+| Databricks smart routing (beta) | Gateway catalog, for coding agents | Cheap model classifies the task once per session | Not described |
+| OpenRouter Auto Router | Many providers | Task classifier plus recent community spend | No |
+| LiteLLM | Any provider | Load balancing; heuristic/keyword auto router | Rules you write |
+| RouteLLM (open source) | One strong, one weak model | Trained on public preference data | You can train your own |
+| **This project** | Any registered model, mixed vendors | Learned from this deployment's judged outcomes; static fallback until enough data | Yes, by design |
+
+What differs: the training data is your own and stays in your database, every decision is explained, hard constraints are separate from preference, and there is a way to observe before acting. What is weaker: a far smaller evaluation than the big platforms, no production track record, no managed service, no streaming yet. **No head-to-head benchmark against any of them has been run**, and the one large independent study found (LLMRouterBench) reports that many routers, including a commercial one, fail to reliably beat simply using the best single model.
+
+## What has been measured
+
+Offline evaluation on **SPROUT** (about 44,000 prompts from MATH, MMLU-Pro, GPQA, MuSR, RAGBench and OpenHermes, each answered and judge-scored by 13 models). Test set: 6,590 prompts the routers never saw. Intervals are 95% bootstrap over prompts. Full method, tables and caveats: [docs/EVALUATION.md](docs/EVALUATION.md); the code is in [`backend/routing_lab`](backend/routing_lab).
+
+![Evaluation pipeline](docs/img/05-evaluation-pipeline.png)
+
+| Router | Quality gain over randomly mixing models (AIQ uplift) | 95% interval |
+|---|---|---|
+| Learned router (kNN) | **+0.030** | 0.025 to 0.035 |
+| Learned router (small neural net) | +0.019 | 0.013 to 0.025 |
+| Original static rules | +0.004 | 0.001 to 0.006 |
+
+![Cost versus quality on held-out prompts](docs/evaluation-curves.png)
+
+How to read it honestly:
+
+- **The learned router adds a small but statistically clear amount; the original static rules add essentially nothing.** That is why learning from outcomes, not rules, is the core of the design.
+- **A big "saving vs the best model" is mostly cheap models being nearly as good.** `gpt-4o` scored 0.848 at $5.01 per 1,000 prompts, but `gpt-4o-mini` alone scored 0.806 (95% of that) at $0.34. Against that fair baseline the router's extra saving is roughly 20% at the same quality bar (point estimates), not the 88% headline figure.
+- **It does not transfer to data it has not seen.** With MMLU-Pro or OpenHermes held out of training, the saving at equal quality fell to 0%. The router must be trained on each deployment's own traffic, which is how it is built.
+- **Average quality can hide losses.** At the matched operating point MMLU-Pro quality dropped from 0.796 to 0.685 while MATH improved. That is what the per-task quality guard is for.
+- **Most of the headroom is untouched.** A perfect router would reach 0.98 quality at $0.43 per 1,000 prompts; the learned router gets about 0.83 at that cost.
+- **Scope.** A benchmark mixture with 2024-era models and published list prices, not customer traffic and not this gateway's models. Online, the router only sees answers from models it chose, which is harder than this offline setting.
+
+Treat this as evidence the approach works in principle, to be re-measured with replay, shadow mode and a live canary.
+
+## Quick start
+
+Requirements: Python 3.11+, Node.js 18+ (for the console), optionally Docker.
+
+### No keys, no network (mock providers)
 
 ```bash
-python scripts/dev.py --demo          # API on :8000 + console on :5173, mock providers and judge
-python scripts/e2e_demo.py            # or: scripted end-to-end check of the whole flow (prints what it verified)
-docker compose -f docker-compose.yml -f docker-compose.demo.yml up --build   # or Docker: console on :8080
+python scripts/dev.py --demo        # API on :8000, console on :5173
+python scripts/e2e_demo.py          # scripted end-to-end check; prints what it verified
+docker compose -f docker-compose.yml -f docker-compose.demo.yml up --build   # console on :8080
 ```
 
-Demo mode answers with deterministic mock models (stronger tiers write fuller answers) and scores them with a heuristic judge, so it proves the pipeline works end to end. It says nothing about real model quality or real savings.
+Demo mode answers with deterministic mock models and scores them with a heuristic judge. It proves the whole pipeline works (routing, fallback, judging, learning, shadow mode, auth) and says **nothing** about real model quality or real savings.
 
-### 1. Backend
+### With real providers
 
 ```bash
 cd backend
-
-python -m venv .venv
-.venv\Scripts\activate          # Windows
-source .venv/bin/activate       # macOS / Linux
-
+python -m venv .venv && .venv\Scripts\activate       # macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env            # .env belongs in backend/, not the repo root
-
-uvicorn app.main:app --reload --port 8000
+cp .env.example .env                                 # add GROQ_API_KEY, GOOGLE_API_KEY, ...
+uvicorn app.main:app --reload --port 8000            # run from backend/: data paths are relative
 ```
-
-> **Start the backend from `backend/`.** Config, the SQLite database, the model registry, dataset/report/model-artifact directories all resolve relative to the working directory.
-
-API docs: <http://localhost:8000/docs> · Health: <http://localhost:8000/health>
-
-### 2. Frontend
 
 ```bash
-cd frontend
-npm install
-npm run dev
+cd frontend && npm install && npm run dev            # console on http://localhost:5173
 ```
 
-Console: <http://localhost:5173> (the dev server proxies `/api` and `/health` to port 8000; it does **not** proxy `/v1` — call the OpenAI-compatible endpoints on port 8000 directly)
+Set `ROUTER_TYPE=learned` (optionally `SHADOW_ROUTER_ENABLED=true`) to use the learned router; it falls back to the static router until it has judged traffic. The embedding model needs `pip install -r requirements-ml.txt`, or set `EMBEDDING_MODEL=hashing` for a dependency-free, cruder encoder. Docker deployments: `docker compose up --build` (verified in demo mode only).
 
-### 3. First route
+Free-tier providers throttle bursts, and the default registry uses small daily quotas for its secondary models; see [docs/REFERENCE.md](docs/REFERENCE.md#providers-and-models).
 
-```bash
-curl -X POST http://localhost:8000/api/route \
-  -H "Content-Type: application/json" \
-  -d "{\"prompt\":\"Write a Python function to detect a cycle in a linked list.\"}"
-```
+## Using it
 
-Then send a real chat with `"model": "auto"`:
-
-```bash
-curl -X POST http://localhost:8000/api/chat \
-  -H "Content-Type: application/json" \
-  -d "{\"model\":\"auto\",\"messages\":[{\"role\":\"user\",\"content\":\"Summarise merge sort.\"}]}"
-```
-
-### 4. Provider keys
-
-The default registry runs entirely on **free-tier** models:
-
-| Tier | Model | Provider | Paid list price (in / out per 1M tokens) |
-|---|---|---|---|
-| small | `openai/gpt-oss-20b` | Groq | $0.075 / $0.30 |
-| small (pinned use) | `nvidia/nemotron-3-super-120b-a12b:free` | OpenRouter | $0.08 / $0.45 |
-| medium | `openai/gpt-oss-120b` (also the quality judge) | Groq | $0.15 / $0.60 |
-| strong | `gemini-3.5-flash-lite` | Google | $0.30 / $2.50 |
-| strong (pinned use) | `gemini-3.5-flash` | Google | $1.50 / $9.00 |
-
-Costs are the providers' published paid prices (Sept 2026), so cost and "saved vs strong" figures show what the traffic would cost on a paid plan even though free-tier calls are billed $0. Put the keys in `backend/.env`:
-
-```env
-GROQ_API_KEY=...
-GOOGLE_API_KEY=...
-OPENAI_COMPATIBLE_BASE_URL=https://openrouter.ai/api/v1
-OPENAI_COMPATIBLE_API_KEY=...
-JUDGE_PROVIDER=registry
-JUDGE_MODEL_ID=openai/gpt-oss-120b
-```
-
-Free-tier limits matter: Gemini 3.5 Flash allows about 20 requests/day and a free OpenRouter key about 50/day, which is why those two are secondary models used only when pinned. Batch jobs (dataset generation, benchmarks) retry rate-limited calls with backoff and skip a prompt only if it keeps failing.
-
-> Each tier resolves to the **cheapest enabled model** in it that passes capability, health, and any per-request constraints. The offline mock models exist only in the test suite's registry (`backend/tests/model_fixtures.py`).
-
----
-
-## Configuration
-
-All settings are environment variables read from `backend/.env`. Copy [backend/.env.example](backend/.env.example) as a starting point — note it currently only lists a subset of these; the full set below is authoritative (verified against `backend/app/config/settings.py`).
-
-### Routing
-
-| Variable | Description | Default |
-|---|---|---|
-| `ROUTER_TYPE` | `rule_based` · `learned` · `tfidf` · `embedding` · `bert` | `rule_based` |
-| `QUALITY_FLOOR` | Minimum expected quality a tier must meet to be eligible | `0.90` |
-| `ROUTING_THRESHOLD` | ML routers: P(strong is better) above which the strong tier wins | `0.60` |
-| `COST_PRIORITY` | Weight on cost when breaking ties between eligible tiers | `0.7` |
-| `LATENCY_PRIORITY` | Weight on latency when breaking ties | `0.3` |
-
-### Learned routing, quality guard and shadow mode
-
-| Variable | Description | Default |
-|---|---|---|
-| `EMBEDDING_MODEL` | Prompt encoder (`sentence-transformers/all-MiniLM-L12-v2`; `hashing` is a dependency-free, much cruder fallback) | MiniLM-L12 |
-| `COLLECT_EMBEDDINGS` | Keep each prompt's embedding (never its text) with judged outcomes; always on for `learned` | `false` |
-| `LEARNED_MIN_SAMPLES` | Judged, embedded outcomes needed before `learned` replaces the static fallback | `50` |
-| `LEARNED_K` / `LEARNED_PRIOR_WEIGHT` / `LEARNED_MIN_SIMILARITY` | Neighbours used, prior strength, similarity cut-off | `40` / `3.0` / `0.5` |
-| `EXPLORATION_BONUS` | Optimism for models with little evidence on a kind of prompt | `0.10` |
-| `GUARD_WINDOW` / `GUARD_MIN_SAMPLES` / `GUARD_TOLERANCE` | Quality guard: recent answers per task type, minimum to act, allowed shortfall below the floor | `50` / `20` / `0.05` |
-| `SHADOW_ROUTER_ENABLED` | Log what the learned router would choose for every request without acting on it | `false` |
-
-### Fallback
-
-| Variable | Description | Default |
-|---|---|---|
-| `FALLBACK_ENABLED` | Escalate a tier on retryable failure or low quality | `true` |
-| `MAX_FALLBACK_ATTEMPTS` | Models tried per request (1–5) | `3` |
-| `FALLBACK_ON_QUALITY_BELOW` | Re-run at a higher tier if the judge scores below this | `0.85` |
-| `FALLBACK_ESCALATION` | `tier_up` (one step at a time) or `strong_only` | `tier_up` |
-
-### Health & Circuit Breaking
-
-| Variable | Description | Default |
-|---|---|---|
-| `HEALTH_FAILURE_THRESHOLD` | Consecutive retryable failures before a model's circuit opens | `3` |
-| `HEALTH_COOLDOWN_SECONDS` | Time an open circuit waits before allowing one half-open trial request | `30` |
-| `REQUEST_MIN_ATTEMPT_BUDGET_MS` | With `timeout_ms` set, don't start another generation/evaluation step with less than this much budget left | `10` |
-
-### Models & Providers
-
-| Variable | Description | Default |
-|---|---|---|
-| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` / `GROQ_API_KEY` | Provider credentials | empty |
-| `OPENAI_COMPATIBLE_BASE_URL` / `OPENAI_COMPATIBLE_API_KEY` | Any OpenAI-shaped endpoint (vLLM, Ollama, OpenRouter, …) | empty |
-| `SMALL_MODEL_ID` / `MEDIUM_MODEL_ID` / `STRONG_MODEL_ID` | Pin one model per tier | empty |
-| `USE_MOCK_PROVIDERS` | Answer every model with the deterministic mock provider (no keys, no network) | `false` |
-| `PROVIDER_TIMEOUT` | Per-provider-call timeout, in seconds | `60` |
-| `MAX_REQUEST_MESSAGES` | Max messages accepted per chat request | `50` |
-
-### Evaluation
-
-| Variable | Description | Default |
-|---|---|---|
-| `JUDGE_PROVIDER` | `mock` (heuristic, offline), `openai`, or `registry` (any registry model, through the gateway's own providers) | `mock` |
-| `JUDGE_MODEL_ID` | Judge model for `openai` or `registry` | `gpt-4o-mini` |
-| `EVALUATE_ON_CHAT` | Score every chat response inline | `true` |
-
-### Server & Storage
-
-| Variable | Description | Default |
-|---|---|---|
-| `BACKEND_HOST` / `BACKEND_PORT` | Bind address | `0.0.0.0` / `8000` |
-| `CORS_ORIGINS` | Comma-separated allowed origins | `http://localhost:5173,…` |
-| `DATABASE_URL` | SQLite database (routing logs, model outcomes, jobs, model health, benchmark reports) | `sqlite:///./data/router.db` |
-| `STORE_PROMPTS` | Persist raw prompt text in logs (off for privacy) | `false` |
-| `LOG_LEVEL` | Python log level | `INFO` |
-| `ROUTER_API_KEY` | When set, `/api/*` and `/v1/*` require `Authorization: Bearer <key>` (`/health` stays open) | empty |
-
----
-
-## Using the Gateway
-
-### Console
-
-| Page | What it does |
-|---|---|
-| **Overview** | System status and quick navigation |
-| **Chat** | Send prompts, compare tiers, inspect extracted features, override the quality floor |
-| **Models** | Registry CRUD (create/edit/enable/disable) plus **live circuit health** and **historical performance** per model, clearly separated in the table and detail view |
-| **Analytics** | Cost reduction, quality retention, strong-model usage, fallback rate, per-tier/task breakdowns |
-| **Benchmark** | Run Always Strong / Always Cheap / Adaptive Router against a prompt set; browse past reports |
-| **Dataset** | Generate preference datasets, browse/search/filter records, review and override labels by hand |
-| **Training** | Train a router (TF-IDF / embedding / BERT), watch progress, compare runs over time, see accuracy/precision/recall/F1/confusion-matrix charts |
-| **Experiments** | Run the full evaluation suite and read generated reports |
-| **Settings** | Current routing, fallback, and health configuration |
-
-### Native API
-
-```bash
-# Routing decision only — no model call, no cost
-curl -X POST http://localhost:8000/api/route \
-  -H "Content-Type: application/json" \
-  -d "{\"prompt\":\"Explain the CAP theorem\"}"
-
-# Chat with automatic routing, a caller identity, and a hard deadline
-curl -X POST http://localhost:8000/api/chat \
-  -H "Content-Type: application/json" \
-  -d "{\"model\":\"auto\",\"messages\":[{\"role\":\"user\",\"content\":\"Explain the CAP theorem\"}],\"user_id\":\"alice\",\"tags\":{\"app\":\"support-bot\"},\"max_cost\":0.01,\"timeout_ms\":15000}"
-
-# Chat pinned to a specific model, with a soft preference honored only if eligible
-curl -X POST http://localhost:8000/api/chat \
-  -H "Content-Type: application/json" \
-  -d "{\"model\":\"auto\",\"preferred_model\":\"openai/gpt-oss-120b\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}"
-
-# Aggregate metrics, scoped usage, per-model circuit health, and historical performance
-curl http://localhost:8000/api/metrics
-curl "http://localhost:8000/api/usage?user_id=alice"
-curl http://localhost:8000/api/health/models
-curl http://localhost:8000/api/performance/models
-```
-
-### OpenAI-Compatible API
-
-Point any OpenAI SDK at this server and set `model` to `"auto"`. No other code changes.
+Point any OpenAI SDK at the gateway and set `model` to `"auto"`:
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
-
-response = client.chat.completions.create(
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")   # your ROUTER_API_KEY if set
+reply = client.chat.completions.create(
     model="auto",
     messages=[{"role": "user", "content": "Summarise merge sort."}],
-    user="alice",                       # recorded as user_id
-    metadata={"app": "support-bot"},    # recorded as usage tags
 )
-
-print(response.choices[0].message.content)
-print(response.model)   # the model actually chosen, e.g. "openai/gpt-oss-20b"
+print(reply.choices[0].message.content)
+print(reply.model)      # the model the router actually chose
 ```
 
-**Optional headers**
+Ask for a routing decision without calling any model:
 
-| Header | Effect |
+```bash
+curl -X POST http://localhost:8000/api/route -H "Content-Type: application/json" \
+  -d '{"prompt":"Write a Python function to detect a cycle in a linked list."}'
+```
+
+Useful reads once traffic flows: `GET /api/metrics`, `/api/usage`, `/api/health/models`, `/api/performance/models`, `/api/performance/segments` (quality guard), `/api/shadow/summary` (shadow mode). Per-request options (`max_cost`, `max_latency_ms`, `timeout_ms`, `preferred_model`, `user_id`, `tags`) and the full endpoint list are in [docs/REFERENCE.md](docs/REFERENCE.md).
+
+## Project structure
+
+```
+backend/
+  app/
+    api/          route handlers (chat, OpenAI-compatible, models, metrics, shadow, ...)
+    router/       features, task/difficulty, policy, hard filters, health, learned router, embedder
+    services/     chat orchestration, fallback + deadline, outcome recording, shadow mode, jobs
+    providers/    Groq, Google, OpenAI, Anthropic, OpenAI-compatible, mock
+    evaluation/   judge, metrics, benchmarks
+    db/           SQLite repositories
+    ...           models (registry), schemas, datasets, training, utils, config
+  routing_lab/    offline evaluation on SPROUT: download, embed, evaluate, report
+  tests/          281 offline tests
+frontend/         React console
+scripts/          dev.py (one-command start), e2e_demo.py (end-to-end check)
+docs/             architecture, routing logic, comparison, evaluation, reference, diagrams
+docker-compose.yml, docker-compose.demo.yml
+```
+
+## Documentation
+
+| Document | What it covers |
 |---|---|
-| `X-Quality-Floor: 0.95` | Override the quality floor for this request only |
-| `X-Request-ID: <id>` | Correlation ID; echoed back on the response and in logs |
-| `X-Request-Timeout-Ms: 15000` | Overall wall-clock budget for the whole request |
-| `Authorization: Bearer <key>` | Required when `ROUTER_API_KEY` is set |
-
-Responses use the standard OpenAI shape plus an optional `router` block (task type, tier, cost, fallback info, request ID).
-
----
-
-## Routers
-
-There are four ways a request can be routed. They are different things and the difference matters for what you can claim:
-
-- **Fallback routing** (`rule_based`): keyword features, a difficulty guess and hand-set quality scores, choosing between the small/medium/strong tier. Explainable and needs no data, but on the offline evaluation it was statistically no better than randomly mixing models. Treat it as the safe default, not the product.
-- **Learned routing** (`learned`): for the incoming prompt, finds the most similar past prompts each model answered, reads the judge's scores for them, and estimates each model's quality *for that kind of prompt*, smoothed toward the registry's hand-set score. It scores **every enabled model** (not one per tier) after the hard capability/health/constraint filters and picks the cheapest one expected to meet the quality floor. With no similar history it keeps the prior. Below `LEARNED_MIN_SAMPLES`, or if the encoder fails, it routes with the fallback and says so in the decision.
-- **Customer calibration**: the learned router trains only on *this deployment's* judged traffic (embeddings stored in its own database), so each customer or deployment calibrates to its own workload. This is required, not optional: on the offline evaluation a router trained without a data source got 0% saving on that source. `POST /api/performance/calibration/apply` additionally recalibrates the registry's quality scores from judged outcomes.
-- **Shadow mode** (`SHADOW_ROUTER_ENABLED=true`): the request is served exactly as before (a pinned model or the configured router). Afterwards the learned router's would-be choice and its estimated cost are logged; `GET /api/shadow/summary` reports agreement and estimated cost change. No extra provider call is made. The shadow model's quality is predicted, never measured, so shadow mode is a screening step before a live canary and must not be quoted as savings.
-
-A **quality guard** watches judged quality per task type (`GET /api/performance/segments`). If the answers customers recently received for a task type fall more than `GUARD_TOLERANCE` below the quality floor, that segment stops being cost-optimised and uses the best-estimated model until quality recovers.
-
-Evaluation limits: the routers were compared offline on SPROUT (a benchmark mixture with 2024-era models); see [docs/EVALUATION.md](docs/EVALUATION.md). The learned router beat random mixing by a small, statistically clear margin, generalised poorly to unseen data sources, and captured little of the oracle headroom. That result is not evidence about your models or your traffic; re-measure with replay, shadow mode and a live canary.
-
-The trainable ML routers below implement the same interface and are swapped with a single environment variable.
-
-All four implement the same interface and are swapped with a single environment variable.
-
-| `ROUTER_TYPE` | Approach | Needs training? |
-|---|---|---|
-| `rule_based` | Feature extraction → task classification → difficulty score → policy. Fully explainable, no cold start. | No |
-| `tfidf` | TF-IDF + logistic regression over prompt text | Yes |
-| `embedding` | SentenceTransformer embeddings + classifier | Yes |
-| `bert` | BERT-style MLP head over embeddings | Yes |
-
-The ML routers predict **P(the strong model is meaningfully better)** and compare it against `ROUTING_THRESHOLD`. They load the most recently trained artifact of their type from `backend/models/` at startup.
-
----
-
-## Reliability & Gateway Features
-
-Everything in this section is invisible when nothing is wrong — it only changes behavior when a request actually needs it.
-
-### Capability-aware routing
-
-Models declare `supports_vision` and `supports_tools` (alongside `context_window`, already present). A request with an image or a non-empty `tools` list, or one whose estimated token count exceeds a tier's context window, hard-excludes any model that can't handle it — before cost/quality comparison, not as a soft penalty.
-
-### Circuit breaking
-
-Each model has an independent circuit: `CLOSED` (healthy) → `OPEN` after `HEALTH_FAILURE_THRESHOLD` consecutive *retryable* provider failures → `HALF_OPEN` for exactly one trial request once `HEALTH_COOLDOWN_SECONDS` has elapsed → `CLOSED` on success or back to `OPEN` on failure. Non-retryable errors (bad request, auth/config issues) never count toward health. `GET /api/health/models` exposes live state, consecutive failures, and cooldown remaining for every registered model.
-
-### Request deadlines
-
-An optional `timeout_ms` is one shared budget across the *entire* request — initial generation, provider-error fallback, quality evaluation, and quality escalation all draw from the same clock, and a step that doesn't have enough budget left is never started. A deadline exhaustion is a distinct `RequestTimeoutError`, never counted as a provider health failure, and returns a structured 504 with the stage, model, and timing.
-
-### Cost & latency constraints, and a soft model preference
-
-`max_cost` and `max_latency_ms` are additional hard filters using the router's existing cost estimate and the registry's `avg_latency_ms` — no new estimation model. `preferred_model` is a *preference*, not a bypass: it's checked against the same capability/health/constraint filters as every other candidate, and if it fails one, routing proceeds normally and the response explains why the preference wasn't honored.
-
-### Request metadata & scoped usage
-
-`request_id` (auto-generated if omitted), `user_id`, `session_id`, and free-form `tags` travel with a request into the routing log. `GET /api/usage` reports total/successful/fallback request counts, total estimated cost, and average latency, with breakdowns by user, model, and tag, filterable by `user_id`, `session_id`, `model_id`, and `tag_key`/`tag_value`.
-
-### Historical model performance
-
-Every generation attempt the gateway makes — including fallback and escalation attempts — is recorded with its outcome: `success`, `quality_failure` (answered, but below the escalation threshold), `retryable_failure`, `non_retryable_failure`, or `timeout`. `GET /api/performance/models` aggregates these per model: request count, success rate, fallback rate, average latency/cost/quality, and an outcome breakdown, filterable by model, task type, and time window. This is reporting only — it does not feed back into routing decisions on its own.
-
-**Calibrating quality scores.** The registry's `quality_score` per model is a hand-set prior. `GET /api/performance/calibration` previews what each score would become after blending it (Bayesian shrinkage, `prior_weight` pseudo-samples) with the judge scores recorded for that model, adjusted for the difficulty of the prompts it handled; `POST /api/performance/calibration/apply` writes them to the registry for models with at least `min_samples` judged outcomes (default 30). Because the router's expected quality is built from `quality_score`, this is how routing starts to reflect measured rather than assumed quality. Applying is not idempotent — re-applying over the same window double-counts it, so pass `since` on repeat runs. Production traffic is not a random sample (easy prompts go to small models), so a benchmark that runs every model on the same prompts (`data/benchmarks/routing_prompts_extended.json`, 48 labelled prompts) gives cleaner numbers.
-
-### Persistent, restart-safe background jobs
-
-Dataset generation, training, benchmark, and experiment runs share one generic SQLite-backed job manager. A job's status survives a backend restart; one still `running` when the process exits is marked `failed` (never silently reported as completed) the next time its job type is used.
-
----
-
-## Training a Router
-
-Training data is generated by the system itself: each prompt is answered at all three tiers, scored by the judge, and reduced to a binary `strong_better` label.
-
-**1. Generate a preference dataset** (at least 4 labeled records are needed to train)
-
-```bash
-curl -X POST http://localhost:8000/api/dataset/generate \
-  -H "Content-Type: application/json" \
-  -d "{\"source_path\":\"data/benchmarks/sample_prompts.json\",\"max_prompts\":8,\"quality_floor\":0.9}"
-```
-
-Review and correct labels on the **Dataset** console page — human overrides take precedence over judge labels.
-
-**2. Train**
-
-```bash
-curl -X POST http://localhost:8000/api/training/start \
-  -H "Content-Type: application/json" \
-  -d "{\"dataset_id\":\"<UUID>\",\"router_type\":\"tfidf\",\"routing_threshold\":0.6}"
-```
-
-Watch progress and see accuracy/precision/recall/F1 and the confusion matrix on the **Training** page, or poll `GET /api/training/status/{job_id}`.
-
-**3. Activate**
-
-```env
-ROUTER_TYPE=tfidf
-```
-
-Restart the backend, then confirm with `GET /api/router/status`.
-
-> Training metrics describe how well the model reproduces the judge's preference labels on a held-out split — they are not a claim that routed response quality improved. The **Training** page's "How training works" panel states this explicitly.
-
----
-
-## Evaluation & Experiments
-
-### Metrics
-
-`GET /api/metrics` aggregates every logged request: `cost_saved`, `quality_retention`, `strong_model_usage`, `fallback_rate`, average cost/latency, and distributions by model/task/tier.
-
-### Benchmarks
-
-```bash
-curl -X POST http://localhost:8000/api/benchmark \
-  -H "Content-Type: application/json" \
-  -d "{\"strategy\":\"adaptive_router\",\"max_prompts\":8}"
-```
-
-Compares Always Strong / Always Cheap / Adaptive Router over one prompt set; reports persist to `backend/experiments/benchmarks/`.
-
-### Full evaluation suite
-
-```bash
-curl -X POST http://localhost:8000/api/experiments/run \
-  -H "Content-Type: application/json" \
-  -d "{\"experiment_type\":\"final_evaluation\",\"max_prompts\":8,\"quality_floor\":0.9}"
-```
-
-Three measured sections — strategy comparison, quality-floor ablation, router comparison — persisted with an auto-generated markdown summary to `backend/experiments/reports/`.
-
----
-
-## API Reference
-
-Interactive docs at `/docs`; full OpenAPI schema at `/openapi.json`.
-
-| Method | Endpoint | Description |
-|---|---|---|
-| GET | `/health` | Service status, version, environment |
-| POST | `/api/route` | Analyse a prompt; supports `preferred_model`, `max_cost`, `max_latency_ms` |
-| GET | `/api/router/status` | Active router type and configuration |
-| POST | `/api/chat` | Chat completion; `model:"auto"`, request metadata, deadline, constraints |
-| GET | `/api/models` | List registered models |
-| GET | `/api/models/{id}` | Model detail |
-| POST | `/api/models` | Register a model |
-| PATCH | `/api/models/{id}` | Update model metadata |
-| POST | `/api/models/{id}/enable` / `/disable` | Enable / disable |
-| GET | `/api/health/models` | Live circuit-breaker state per model |
-| GET | `/api/performance/models` | Historical per-model performance (filterable) |
-| GET | `/api/performance/calibration` | Preview quality scores calibrated against judged outcomes |
-| POST | `/api/performance/calibration/apply` | Write calibrated quality scores to the registry |
-| GET | `/api/usage` | Scoped usage totals and breakdowns |
-| POST | `/api/evaluate` | Judge a prompt/response pair |
-| GET | `/api/metrics` | Aggregated routing metrics |
-| POST | `/api/benchmark` | Start a benchmark job |
-| GET | `/api/benchmark/status/{job_id}` | Benchmark job status |
-| GET | `/api/benchmarks` / `/api/benchmarks/{id}` | List / get benchmark reports |
-| POST | `/api/dataset/generate` | Start preference-dataset generation |
-| GET | `/api/dataset/generate/status/{job_id}` | Generation job status |
-| GET | `/api/dataset` / `/api/dataset/{id}` | List datasets / paginated records |
-| POST | `/api/dataset/{id}/human-eval` | Override a label by hand |
-| POST | `/api/training/start` | Train a router from a dataset |
-| GET | `/api/training/status/{job_id}` | Training job status and metrics |
-| GET | `/api/training/models` | List trained artifacts |
-| POST | `/api/experiments/run` | Run the evaluation suite |
-| GET | `/api/experiments/status/{job_id}` | Experiment job status |
-| GET | `/api/experiments` / `/api/experiments/{id}` | List / get experiment reports |
-| POST | `/v1/chat/completions` | Drop-in OpenAI chat completions |
-| GET | `/v1/models` / `/v1/models/{id}` | List models, including virtual `auto` |
-
----
-
-## Frontend Console
-
-| Layer | Technology |
-|---|---|
-| Framework | React 18, TypeScript, Vite 6 |
-| Styling | Tailwind CSS (custom design tokens: `surface`/`ink`/`line` scales, semantic `success`/`warning`/`danger`/`info` colors) |
-| Charts | Recharts |
-| Routing | React Router 7 |
-| HTTP | axios |
-| Icons | lucide-react |
-
-A small shared component library (`Card`, `Button`, `Badge`, `Modal`, `Table`, `Input`, `Select`, `EmptyState`, `ErrorBanner`, `JobProgressBar`, `PageHeader`, `StatCard`) backs every page for a consistent look, with loading skeletons and explicit empty/error states throughout. Each page's larger pieces (charts, modals, formatters) live colocated under `src/pages/<page>/` rather than in one large file.
-
----
-
-## Project Structure
-
-```
-Adaptive_Model_Router/
-├── backend/
-│   ├── app/
-│   │   ├── api/            # FastAPI route handlers, one module per resource
-│   │   ├── config/         # Pydantic settings loaded from .env
-│   │   ├── datasets/       # Preference-dataset generation and JSONL storage
-│   │   ├── db/             # SQLite connection + repositories (routing logs, jobs,
-│   │   │                   #   model health, model outcomes, benchmark reports)
-│   │   ├── evaluation/     # Judge, metrics, benchmarks, experiment reports
-│   │   ├── models/         # Model registry (tiers, cost, quality, capabilities)
-│   │   ├── providers/      # OpenAI · Anthropic · Google · Groq · compatible · mock
-│   │   ├── router/         # features → task → difficulty → policy; capability,
-│   │   │                   #   health, and constraint eligibility; 4 routers
-│   │   ├── schemas/        # Pydantic request/response contracts
-│   │   ├── services/       # Chat orchestration, fallback + health + deadlines,
-│   │   │                   #   outcome recording, usage/performance, background jobs
-│   │   ├── training/       # Trainers, artifact registry, training service
-│   │   ├── utils/          # Cost, tokens, logging, OpenAI conversion
-│   │   └── main.py         # App factory and router wiring
-│   ├── data/               # Runtime state: registry, datasets, router.db
-│   ├── experiments/        # CLI runner and generated reports
-│   ├── models/             # Trained router artifacts (.joblib)
-│   ├── tests/              # 216 pytest tests, incl. per-test database/registry isolation
-│   └── requirements.txt
-├── frontend/
-│   ├── src/
-│   │   ├── components/     # Shared design-system components
-│   │   ├── pages/          # One page per route, with colocated `pages/<name>/` helpers
-│   │   ├── services/api.ts # Typed axios client
-│   │   └── types/          # TypeScript mirrors of backend schemas
-│   └── package.json
-├── data/ · models/ · experiments/   # Placeholder dirs for root-level runs
-└── docker-compose.yml       # backend (8000) + nginx-served console (8080)
-```
-
----
-
-## Development
-
-```bash
-# Backend tests, from backend/
-pytest -v
-pytest tests/test_model_health.py -v     # a single module
-
-# Frontend
-cd frontend
-npm run build     # tsc -b && vite build
-npm run lint
-npm run preview
-```
-
-Backend tests are fully offline (mock providers, mock judge) and isolated: an autouse fixture gives every test a fresh temporary SQLite database and the offline test registry (`tests/model_fixtures.py`), pins judge/quality settings and blanks every provider key, so tests never read or write the developer's real `backend/data/router.db`, and a session-scoped guard fails the run if anything ever does.
-
-**Adding a provider:** implement `BaseModelProvider` in [backend/app/providers/](backend/app/providers/), register it in [factory.py](backend/app/providers/factory.py), then add your models to the registry with the correct tier, cost, and capability metadata.
-
-**Adding a router:** subclass the base in [backend/app/router/](backend/app/router/), register it in [base.py](backend/app/router/base.py), and add its name to the `ROUTER_TYPE` literal in [settings.py](backend/app/config/settings.py).
-
----
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Components, request lifecycle, reliability, data model, deployment |
+| [docs/HOW_ROUTING_WORKS.md](docs/HOW_ROUTING_WORKS.md) | Static and learned routers, formulas, cold start, calibration, quality guard, shadow mode |
+| [docs/COMPARISON.md](docs/COMPARISON.md) | Comparison with Azure, AWS, Google, Databricks, OpenRouter, LiteLLM, RouteLLM and others, with sources |
+| [docs/EVALUATION.md](docs/EVALUATION.md) | Offline evaluation method, full results, weaknesses |
+| [docs/REFERENCE.md](docs/REFERENCE.md) | Configuration, API, console, training the ML routers, development |
+| [GATEWAY_AUDIT.md](GATEWAY_AUDIT.md) | Earlier technical audit of the gateway |
+| [docs/diagrams/](docs/diagrams) | Mermaid sources of every diagram |
 
 ## Limitations
 
-- **No streaming.** `stream=true` is not supported on `/v1/chat/completions`.
-- **Settings are read-only in the UI.** Change `backend/.env` and restart.
-- **Docker is verified only in demo mode.** The images build, the backend passes its health check, and a chat routed through the nginx-proxied console works with `docker-compose.demo.yml` (mock providers). It has not been run against live providers or in a real deployment.
-- **Only the rule-based router works with no data.** (`learned` also starts on day one, but routes with the rule-based fallback until it has judged traffic.) The `tfidf`, `embedding` and `bert` routers load a trained artifact from `backend/models/`, and none ships with the repo; selecting one before training raises `FileNotFoundError`. The embedding router additionally needs `pip install -r requirements-ml.txt`.
-- **Quality estimates are static.** Per-model `quality_score` values in the registry are hand-set, not measured, so the router's "expected quality" is an assumption until it is calibrated against judged outcomes.
-- **The committed experiment report is a 4-prompt smoke run**, not evidence of savings.
-- **Both `.env.example` files are stale** — they don't list the health/deadline/request-metadata variables documented above. Use the [Configuration](#configuration) tables in this README as the source of truth.
-- **Working directory matters.** Run the backend from `backend/`; every data path is relative to it.
-- **Feedback only corrects quality, and only where there is evidence.** Once a model has 10+ judged outcomes for a task type, its expected quality for that task blends measurements with the registry prior (see `app/router/feedback.py`). Latency, cost and failure rates from `/api/performance/models` still don't influence routing, and a model that stops being chosen stops producing evidence (no exploration yet).
-- **Free-tier rate limits** — Groq, Google and OpenRouter free tiers throttle bursts; large dataset or benchmark runs slow down on retries and may skip a prompt.
-- **A model whose one live health-check trial fails with a non-retryable error can stay stuck `HALF_OPEN`** rather than reopening — a known edge case in the circuit breaker, not covered by an automatic recovery path yet.
-- **Authentication is a single shared key.** Setting `ROUTER_API_KEY` protects both `/api/*` and `/v1/*` (`/health` stays open); there are no per-tenant keys yet. The console sends the key from `localStorage['router_api_key']` or the build-time `VITE_API_KEY`.
-- **No rate limiting, and no per-tenant model preference beyond the per-request `preferred_model` field.**
-
----
+- **Offline evidence only.** The learned router has not been run on live traffic; only mock providers have been used end to end. The committed experiment report is a small smoke run, not evidence of savings.
+- **Cold start.** Until a deployment has enough judged traffic the static rules route requests, and those were no better than random mixing offline.
+- **Judge dependence.** Quality is whatever the judge says; a noisy or biased judge trains a biased router.
+- **Bandit feedback.** Online, only answers from chosen models are observed; exploration and shadow mode widen the evidence but do not remove this.
+- **No streaming.** `stream=true` is not supported.
+- **Security model.** One shared API key; no per-customer keys, rate limits or tenant isolation. SQLite storage. Prompt embeddings are derived from prompt text, so treat the database as sensitive.
+- **Docker** is verified in demo mode only.
+- **The `tfidf`, `embedding` and `bert` routers** need training first and none ships trained.
+- **Free-tier rate limits** affect batch jobs on the default registry.
+- **Known circuit-breaker edge case:** a model whose single half-open trial fails with a non-retryable error can stay `HALF_OPEN` instead of reopening.
 
 ## Roadmap
 
 | Status | Item |
 |---|---|
-| ✅ | Model registry, provider adapters, chat API |
-| ✅ | Rule-based and trained (TF-IDF/embedding/BERT) routers |
-| ✅ | LLM-as-judge evaluation, metrics, benchmarking, final-evaluation suite |
-| ✅ | Preference-dataset pipeline with human override |
-| ✅ | Provider-error and quality-based fallback escalation |
-| ✅ | Capability-aware routing (vision, tools, context window) |
-| ✅ | Per-model circuit breaking with health cooldown/recovery |
-| ✅ | End-to-end request deadlines, independent of routing-latency constraints |
-| ✅ | Request metadata, `preferred_model`, cost/latency constraints, scoped usage reporting |
-| ✅ | Historical per-model performance from recorded generation outcomes |
-| ✅ | Unified, restart-safe background job manager |
-| ✅ | Full React console: Overview, Chat, Models+Health, Analytics, Benchmark, Dataset, Training, Experiments, Settings |
-| ✅ | OpenAI-compatible API |
-| 🟡 | Judged quality per (model, task type) corrects routing's expected quality; exploration / bandit still to do |
-| ⬜ | Streaming responses |
-| ✅ | Provider-agnostic judge (`JUDGE_PROVIDER=registry`) |
-| ✅ | Shared-key authentication on `/api/*` and `/v1/*` |
-| ⬜ | PostgreSQL persistence, per-tenant keys, rate limiting |
-| ✅ | Docker images build and run (verified in keyless demo mode) |
-| ✅ | Learned router (all-model candidates, cold-start fallback), quality guard, shadow mode |
-
----
+| Done | Gateway, providers, fallback, circuit breakers, deadlines, capability-aware routing, OpenAI-compatible API, React console |
+| Done | Learned router (all-model candidates, cold-start fallback), quality guard, shadow mode, per-deployment embedding collection |
+| Done | Offline evaluation harness with baselines and confidence intervals |
+| Next | Replay evaluation on a held-out real workload; live shadow run and canary on real providers |
+| Next | Streaming responses |
+| Later | Per-customer keys and rate limits, PostgreSQL, multi-tenant isolation |
 
 ## License
 
-Academic project — final-year AI/ML coursework.
+Academic project.
